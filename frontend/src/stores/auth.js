@@ -1,6 +1,10 @@
-// frontend/src/stores/auth.js - Fixed version
+// 1. frontend/src/stores/auth.js (แก้ไข - เพิ่ม API_BASE_URL)
 import { defineStore } from 'pinia'
 import axios from 'axios'
+import API_BASE_URL from '@/config/api'
+
+
+axios.defaults.baseURL = API_BASE_URL
 
 export const useAuthStore = defineStore('auth', {
   state: () => ({
@@ -33,10 +37,7 @@ export const useAuthStore = defineStore('auth', {
         localStorage.setItem('token', access_token)
         localStorage.setItem('role', role)
         
-        // Set axios default header
         axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`
-        
-        // Get user info
         await this.fetchUser()
         
         return true
@@ -54,7 +55,7 @@ export const useAuthStore = defineStore('auth', {
         localStorage.setItem('role', response.data.role)
       } catch (error) {
         console.error('Failed to fetch user:', error)
-        this.logout() // Logout if can't fetch user
+        this.logout() 
       }
     },
     

@@ -1,4 +1,3 @@
-<!-- frontend/src/App.vue -->
 <template>
   <v-app>
     <!-- Navigation Drawer -->
@@ -60,22 +59,6 @@
     <v-main>
       <router-view />
     </v-main>
-
-    <!-- Global Snackbar -->
-    <v-snackbar
-      v-model="snackbar.visible"
-      :color="snackbar.color"
-      :timeout="snackbar.timeout"
-      :multi-line="snackbar.multiLine"
-      location="top right"
-    >
-      {{ snackbar.message }}
-      <template v-slot:actions>
-        <v-btn variant="text" @click="snackbar.hide()">
-          Close
-        </v-btn>
-      </template>
-    </v-snackbar>
   </v-app>
 </template>
 
@@ -83,17 +66,15 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { useSnackbarStore } from '@/stores/snackbar'
 import axios from 'axios'
+import API_BASE_URL from '@/config/api'
 
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
-const snackbar = useSnackbarStore()
 
 const drawer = ref(true)
 
-// Computed properties
 const showNavigation = computed(() => {
   return authStore.isAuthenticated && route.name !== 'login'
 })
@@ -101,14 +82,15 @@ const showNavigation = computed(() => {
 const user = computed(() => authStore.user)
 const canManage = computed(() => authStore.hasRole('user'))
 
-// Methods
 const logout = () => {
   authStore.logout()
   router.push('/login')
 }
 
-// Set up axios interceptors
 onMounted(() => {
+  // Set base URL
+  axios.defaults.baseURL = API_BASE_URL
+  
   // Request interceptor
   axios.interceptors.request.use(
     (config) => {
@@ -133,24 +115,10 @@ onMounted(() => {
       return Promise.reject(error)
     }
   )
-
-  // Set base URL
-  axios.defaults.baseURL = 'http://localhost:8000'
   
-  // Initialize auth if token exists
   if (authStore.token) {
+    axios.defaults.headers.common['Authorization'] = `Bearer ${authStore.token}`
     authStore.fetchUser()
   }
 })
 </script>
-
-<style>
-/* Global styles */
-.v-application {
-  font-family: 'Roboto', sans-serif;
-}
-
-.cursor-pointer {
-  cursor: pointer;
-}
-</style>

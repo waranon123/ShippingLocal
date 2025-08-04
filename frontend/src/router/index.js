@@ -1,7 +1,6 @@
 // frontend/src/router/index.js
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-
 const router = createRouter({
   history: createWebHistory(),
   routes: [
@@ -49,7 +48,7 @@ router.beforeEach((to, from, next) => {
   if (to.meta.requiresAuth && !authStore.isAuthenticated) {
     next('/login')
   } else if (to.meta.requiredRole && !authStore.hasRole(to.meta.requiredRole)) {
-    next('/dashboard') // Redirect to dashboard if no permission
+    next('/dashboard')
   } else {
     next()
   }

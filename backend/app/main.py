@@ -24,7 +24,9 @@ app = FastAPI(title="Truck Management System API - Supabase")
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:3000",
+    "http://localhost:5173",
+    "https://*.vercel.app",],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -32,8 +34,8 @@ app.add_middleware(
 
 # Configuration
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY") 
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "fallback-secret-key-for-dev")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 JWT_EXPIRATION_MINUTES = int(os.getenv("JWT_EXPIRATION_MINUTES", "60"))
 
@@ -41,7 +43,16 @@ JWT_EXPIRATION_MINUTES = int(os.getenv("JWT_EXPIRATION_MINUTES", "60"))
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login")
-
+if not SUPABASE_URL or not SUPABASE_KEY:
+    print("⚠️  Warning: SUPABASE_URL and SUPABASE_KEY not set")
+    # สร้าง dummy client สำหรับ development
+    class DummySupabase:
+        def table(self, name): return self
+        def select(self, *args): return self
+        def execute(self): return type('obj', (object,), {'data': [], 'count': 0})
+    supabase = DummySupabase()
+else:
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 # WebSocket Manager
 class ConnectionManager:
     def __init__(self):
