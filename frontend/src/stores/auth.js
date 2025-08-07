@@ -1,3 +1,5 @@
+// frontend/src/stores/auth.js - Fixed unsafe headers
+
 import { defineStore } from 'pinia'
 import axios from 'axios'
 
@@ -27,10 +29,18 @@ console.log('🔗 API Base URL:', API_BASE_URL)
 axios.defaults.baseURL = API_BASE_URL
 axios.defaults.timeout = 10000
 
-// Add request interceptor for debugging
+// Add request interceptor for debugging (removed unsafe headers)
 axios.interceptors.request.use(
   (config) => {
     console.log('📤 API Request:', config.method?.toUpperCase(), config.url)
+    
+    // Only add safe headers that browsers allow
+    config.headers['Accept'] = 'application/json'
+    config.headers['Content-Type'] = config.headers['Content-Type'] || 'application/json'
+    
+    // For ngrok, we can only use certain headers
+    // These headers should be set by the server/backend, not the client
+    
     return config
   },
   (error) => {
@@ -79,8 +89,7 @@ export const useAuthStore = defineStore('auth', {
         
         const response = await axios.post('/api/auth/login', formData, {
           headers: {
-            'Content-Type': 'multipart/form-data',
-            'ngrok-skip-browser-warning': 'true'
+            'Content-Type': 'multipart/form-data'
           }
         })
         
@@ -120,11 +129,7 @@ export const useAuthStore = defineStore('auth', {
     
     async fetchUser() {
       try {
-        const response = await axios.get('/api/auth/me', {
-          headers: {
-            'ngrok-skip-browser-warning': 'true'
-          }
-        })
+        const response = await axios.get('/api/auth/me')
         this.user = response.data
         this.role = response.data.role
         localStorage.setItem('role', response.data.role)
@@ -150,13 +155,7 @@ export const useAuthStore = defineStore('auth', {
       try {
         console.log('🔑 Attempting guest login...')
         
-        const response = await axios.post('/api/auth/guest-login', {}, {
-          headers: {
-            'ngrok-skip-browser-warning': 'true',
-            'Accept': 'application/json',
-            'Content-Type': 'application/json'
-          }
-        })
+        const response = await axios.post('/api/auth/guest-login', {})
         
         const { access_token, role } = response.data
         
@@ -185,12 +184,6 @@ export const useAuthStore = defineStore('auth', {
           username,
           password,
           role
-        }, {
-          headers: {
-            'ngrok-skip-browser-warning': 'true',
-            'Accept': 'application/json',
-            'Content-Type': 'application/json'
-          }
         })
         
         console.log('✅ User registered successfully:', response.data)

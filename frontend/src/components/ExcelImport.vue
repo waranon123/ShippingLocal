@@ -1,3 +1,5 @@
+// frontend/src/components/ExcelImport.vue - Updated for monthly import
+
 <template>
   <v-dialog v-model="dialog" max-width="800px">
     <template v-slot:activator="{ props }">
@@ -6,13 +8,13 @@
         v-bind="props"
         prepend-icon="mdi-file-excel"
       >
-        Import Excel
+        Import Excel (Monthly)
       </v-btn>
     </template>
 
     <v-card>
       <v-card-title>
-        <span class="text-h5">Import Trucks from Excel</span>
+        <span class="text-h5">Import Monthly Truck Data from Excel</span>
       </v-card-title>
 
       <v-card-text>
@@ -33,7 +35,7 @@
               step="2"
               value="2"
             >
-              Preview Data
+              Preview Monthly Data
             </v-stepper-item>
 
             <v-divider></v-divider>
@@ -55,7 +57,7 @@
                     <v-file-input
                       v-model="file"
                       accept=".xlsx,.xls"
-                      label="Select Excel file"
+                      label="Select Excel file with monthly data"
                       prepend-icon="mdi-file-excel"
                       show-size
                       :rules="fileRules"
@@ -68,12 +70,21 @@
                   <div class="d-flex align-center justify-space-between">
                     <span>Need a template?</span>
                     <v-btn size="small" color="primary" @click="downloadTemplate">
-                      Download Template
+                      Download Monthly Template
                     </v-btn>
                   </div>
                 </v-alert>
 
                 <v-divider class="my-4"></v-divider>
+
+                <v-alert type="warning" class="mb-4">
+                  <div class="text-subtitle-1 mb-2">📅 Monthly Import Feature:</div>
+                  <ul>
+                    <li>Each row will create daily records for the entire month</li>
+                    <li>Example: "2024-01" creates 31 records (Jan 1-31, 2024)</li>
+                    <li>Shipping No will be auto-suffixed with date (SHP001_20240101, SHP001_20240102, etc.)</li>
+                  </ul>
+                </v-alert>
 
                 <div class="text-subtitle-1 mb-2">Required Columns:</div>
                 <v-chip-group>
@@ -119,8 +130,24 @@
                   </span>
                 </v-alert>
 
+                <v-card class="mb-4" variant="outlined">
+                  <v-card-title class="text-h6">Monthly Import Summary</v-card-title>
+                  <v-card-text>
+                    <v-row>
+                      <v-col cols="6">
+                        <div class="text-h4 text-primary">{{ preview.total_templates }}</div>
+                        <div class="text-body-2">Monthly Templates</div>
+                      </v-col>
+                      <v-col cols="6">
+                        <div class="text-h4 text-success">{{ preview.total_records_to_create }}</div>
+                        <div class="text-body-2">Daily Records to Create</div>
+                      </v-col>
+                    </v-row>
+                  </v-card-text>
+                </v-card>
+
                 <div class="text-h6 mb-2">
-                  Preview ({{ preview.preview.length }} of {{ preview.total_rows }} rows)
+                  Preview Monthly Templates ({{ preview.preview.length }} shown)
                 </div>
 
                 <v-data-table
@@ -130,6 +157,18 @@
                   :items-per-page="5"
                   class="elevation-1"
                 >
+                  <template v-slot:item.month="{ item }">
+                    <v-chip color="primary" size="small">
+                      {{ item.year }}-{{ String(item.month).padStart(2, '0') }}
+                    </v-chip>
+                  </template>
+                  
+                  <template v-slot:item.preview_days="{ item }">
+                    <v-chip color="info" size="small">
+                      {{ item.preview_days }} days
+                    </v-chip>
+                  </template>
+                  
                   <template v-slot:item.status_preparation="{ item }">
                     <v-chip
                       size="x-small"
@@ -150,11 +189,8 @@
                   </template>
                 </v-data-table>
 
-                <v-alert type="info" class="mt-4">
-                  <strong>{{ preview.total_rows }}</strong> trucks will be imported.
-                  <span v-if="preview.errors.length > 0">
-                    ({{ preview.errors.length }} rows have errors and will be skipped)
-                  </span>
+                <v-alert type="success" class="mt-4" v-if="preview.message">
+                  {{ preview.message }}
                 </v-alert>
               </v-container>
 
@@ -167,7 +203,7 @@
                   @click="confirmImport"
                   :loading="importing"
                 >
-                  Confirm Import
+                  Confirm Monthly Import
                 </v-btn>
               </v-card-actions>
             </v-stepper-window-item>
@@ -180,7 +216,7 @@
                   prominent
                 >
                   <div class="text-h6">
-                    {{ importResult.success ? 'Import Successful!' : 'Import Failed' }}
+                    {{ importResult.success ? 'Monthly Import Successful!' : 'Monthly Import Failed' }}
                   </div>
                   <div class="mt-2">
                     {{ importResult.message }}
@@ -190,13 +226,13 @@
                 <v-table v-if="importResult.imported > 0" class="mt-4">
                   <tbody>
                     <tr>
-                      <td>Successfully Imported</td>
+                      <td>Successfully Imported Daily Records</td>
                       <td class="text-right">
                         <strong class="text-green">{{ importResult.imported }}</strong>
                       </td>
                     </tr>
                     <tr v-if="importResult.failed > 0">
-                      <td>Failed</td>
+                      <td>Failed Records</td>
                       <td class="text-right">
                         <strong class="text-red">{{ importResult.failed }}</strong>
                       </td>
@@ -206,13 +242,13 @@
 
                 <div v-if="importResult.failed_details && importResult.failed_details.length > 0" class="mt-4">
                   <div class="text-subtitle-1 mb-2">Failed imports:</div>
-                  <v-list density="compact">
+                  <v-list density="compact" max-height="200" style="overflow-y: auto">
                     <v-list-item
                       v-for="(fail, index) in importResult.failed_details"
                       :key="index"
                     >
                       <v-list-item-title>
-                        Row {{ fail.row }}: {{ fail.shipping_no }}
+                        Template {{ fail.template }}{{ fail.day ? `, Day ${fail.day}` : '' }}: {{ fail.shipping_no }}
                       </v-list-item-title>
                       <v-list-item-subtitle>
                         {{ fail.error }}
@@ -254,8 +290,8 @@ const file = ref(null)
 const uploading = ref(false)
 const importing = ref(false)
 
-// Column definitions - Updated for Shipping No.
-const requiredColumns = ['Terminal', 'Shipping No', 'Dock Code', 'Route']
+// Column definitions - Updated for monthly import
+const requiredColumns = ['Month (YYYY-MM)', 'Terminal', 'Shipping No', 'Dock Code', 'Route']
 const optionalColumns = ['Prep Start', 'Prep End', 'Load Start', 'Load End', 'Status Prep', 'Status Load']
 
 // Validation rules
@@ -268,9 +304,11 @@ const fileRules = [
 const preview = ref({
   session_id: null,
   preview: [],
-  total_rows: 0,
+  total_templates: 0,
+  total_records_to_create: 0,
   errors: [],
-  columns_found: []
+  columns_found: [],
+  message: ''
 })
 
 // Import result
@@ -282,8 +320,10 @@ const importResult = ref({
   failed_details: []
 })
 
-// Table headers for preview - Updated for Shipping No.
+// Table headers for preview - Updated for monthly data
 const previewHeaders = [
+  { title: 'Month', key: 'month' },
+  { title: 'Days', key: 'preview_days' },
   { title: 'Terminal', key: 'terminal' },
   { title: 'Shipping No', key: 'shipping_no' },
   { title: 'Dock Code', key: 'dock_code' },
@@ -308,9 +348,11 @@ const handleFileSelect = (file) => {
     preview.value = {
       session_id: null,
       preview: [],
-      total_rows: 0,
+      total_templates: 0,
+      total_records_to_create: 0,
       errors: [],
-      columns_found: []
+      columns_found: [],
+      message: ''
     }
   }
 }
@@ -324,12 +366,12 @@ const downloadTemplate = async () => {
     const url = window.URL.createObjectURL(new Blob([response.data]))
     const link = document.createElement('a')
     link.href = url
-    link.setAttribute('download', 'truck_import_template.xlsx')
+    link.setAttribute('download', 'truck_monthly_import_template.xlsx')
     document.body.appendChild(link)
     link.click()
     link.remove()
     
-    snackbar.success('Template downloaded successfully')
+    snackbar.success('Monthly template downloaded successfully')
   } catch (error) {
     console.error('Download template error:', error)
     snackbar.error('Failed to download template')
@@ -352,7 +394,7 @@ const uploadFile = async () => {
     
     preview.value = response.data
     step.value = '2'
-    snackbar.success('File uploaded successfully')
+    snackbar.success('Monthly data file uploaded successfully')
   } catch (error) {
     console.error('Upload error:', error)
     snackbar.error(error.response?.data?.detail || 'Failed to upload file')
@@ -378,19 +420,19 @@ const confirmImport = async () => {
     emit('imported', response.data.imported)
     
     if (response.data.success) {
-      snackbar.success(`Successfully imported ${response.data.imported} trucks`)
+      snackbar.success(`Successfully imported ${response.data.imported} daily records from monthly templates`)
     }
   } catch (error) {
     console.error('Import error:', error)
     importResult.value = {
       success: false,
-      message: error.response?.data?.detail || 'Import failed',
+      message: error.response?.data?.detail || 'Monthly import failed',
       imported: 0,
       failed: 0,
       failed_details: []
     }
     step.value = '3'
-    snackbar.error('Import failed')
+    snackbar.error('Monthly import failed')
   } finally {
     importing.value = false
   }
@@ -405,9 +447,11 @@ const closeAndRefresh = () => {
     preview.value = {
       session_id: null,
       preview: [],
-      total_rows: 0,
+      total_templates: 0,
+      total_records_to_create: 0,
       errors: [],
-      columns_found: []
+      columns_found: [],
+      message: ''
     }
     importResult.value = {
       success: false,
@@ -419,3 +463,17 @@ const closeAndRefresh = () => {
   }, 300)
 }
 </script>
+
+<style scoped>
+.v-stepper {
+  box-shadow: none;
+}
+
+.v-chip {
+  font-weight: 600;
+}
+
+.text-h4 {
+  font-weight: 700;
+}
+</style>
