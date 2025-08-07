@@ -860,47 +860,42 @@ async def confirm_excel_import(
     session = import_sessions.get(session_id)
     if not session:
         raise HTTPException(400, "Import session not found or expired")
-    
+
     if session['user_id'] != current_user.id:
         raise HTTPException(403, "Unauthorized")
-    
+
     truck_templates = session['truck_templates']
     imported_count = 0
     failed_imports = []
-    
+
     try:
         for template_index, truck_template in enumerate(truck_templates):
             try:
                 year = truck_template['year']
                 month = truck_template['month']
                 days_in_month = monthrange(year, month)[1]
-                
+
+                # ใช้ shipping_no เดิมจาก template
+                base_shipping_no = truck_template['shipping_no']
+
                 # Create a record for each day of the month
                 for day in range(1, days_in_month + 1):
                     try:
-                        # Create unique shipping_no for each day
-                        base_shipping_no = truck_template['shipping_no']
-                        daily_shipping_no = f"{base_shipping_no}_{year:04d}{month:02d}{day:02d}"
-                        
-                        # Check if record already exists for this date
                         record_date = date(year, month, day)
-                        
-                        # Fixed: Use func imported from sqlalchemy
+
+                        # ตรวจสอบว่ามี record สำหรับวันนั้นอยู่แล้วหรือไม่
                         existing = db.query(Truck).filter(
                             and_(
-                                Truck.shipping_no == daily_shipping_no,
-                                func.date(Truck.created_at) == record_date  # Fixed: Use func here
+                                Truck.shipping_no == base_shipping_no,
+                                func.date(Truck.created_at) == record_date
                             )
                         ).first()
-                        
+
                         if existing:
                             # Update existing record
                             for key, value in truck_template.items():
                                 if key not in ['year', 'month', 'preview_days']:
-                                    if key == 'shipping_no':
-                                        setattr(existing, key, daily_shipping_no)
-                                    else:
-                                        setattr(existing, key, value)
+                                    setattr(existing, key, value)
                             existing.updated_at = datetime.utcnow()
                             created_truck = existing
                         else:
@@ -908,21 +903,18 @@ async def confirm_excel_import(
                             truck_data = {}
                             for key, value in truck_template.items():
                                 if key not in ['year', 'month', 'preview_days']:
-                                    if key == 'shipping_no':
-                                        truck_data[key] = daily_shipping_no
-                                    else:
-                                        truck_data[key] = value
-                            
+                                    truck_data[key] = value
+
                             db_truck = Truck(**truck_data)
                             db_truck.id = str(uuid.uuid4())
                             db_truck.created_at = datetime.combine(record_date, datetime.min.time())
                             db.add(db_truck)
                             created_truck = db_truck
-                        
+
                         db.commit()
                         db.refresh(created_truck)
                         imported_count += 1
-                        
+
                         # Broadcast only for today's records to avoid spam
                         if record_date == date.today():
                             await manager.broadcast({
@@ -943,17 +935,17 @@ async def confirm_excel_import(
                                     "updated_at": created_truck.updated_at.isoformat() if created_truck.updated_at else None
                                 }
                             })
-                            
+
                     except Exception as day_error:
                         print(f"❌ Day error for template {template_index + 1}, day {day}: {str(day_error)}")
                         failed_imports.append({
                             "template": template_index + 1,
                             "day": day,
-                            "shipping_no": f"{truck_template.get('shipping_no', 'Unknown')}_{year:04d}{month:02d}{day:02d}",
+                            "shipping_no": base_shipping_no,
                             "error": str(day_error)
                         })
                         db.rollback()  # Rollback failed transaction
-                        
+
             except Exception as template_error:
                 print(f"❌ Template error for template {template_index + 1}: {str(template_error)}")
                 failed_imports.append({
@@ -961,13 +953,13 @@ async def confirm_excel_import(
                     "shipping_no": truck_template.get('shipping_no', 'Unknown'),
                     "error": str(template_error)
                 })
-        
+
         # Clean up session
         if session_id in import_sessions:
             del import_sessions[session_id]
-        
+
         print(f"✅ Import completed: {imported_count} imported, {len(failed_imports)} failed")
-        
+
         return clean_for_json({
             "success": True,
             "imported": imported_count,
@@ -975,17 +967,18 @@ async def confirm_excel_import(
             "failed_details": failed_imports,
             "message": f"Successfully imported {imported_count} daily records from monthly templates"
         })
-        
+
     except Exception as e:
         print(f"❌ Import exception: {str(e)}")
         import traceback
         traceback.print_exc()
-        
+
         # Clean up session on error
         if session_id in import_sessions:
             del import_sessions[session_id]
-            
+
         raise HTTPException(500, f"Import failed: {str(e)}")
+
     
 @app.get("/api/trucks/{truck_id}")
 async def get_truck(
