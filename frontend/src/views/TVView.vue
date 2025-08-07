@@ -20,7 +20,7 @@
             <v-table class="tv-table">
               <thead>
                 <tr>
-                  <th class="text-left text-h5 font-weight-bold">Truck No.</th>
+                  <th class="text-left text-h5 font-weight-bold">Shipping No.</th>
                   <th class="text-left text-h5 font-weight-bold">Dock Code</th>
                   <th class="text-left text-h5 font-weight-bold">Route</th>
                   <th class="text-left text-h5 font-weight-bold">Preparation</th>
@@ -29,7 +29,7 @@
               </thead>
               <tbody>
                 <tr v-for="truck in terminalGroup.trucks" :key="truck.id" class="tv-row">
-                  <td class="text-h5 font-weight-medium">{{ truck.truck_no }}</td>
+                  <td class="text-h5 font-weight-medium">{{ truck.shipping_no }}</td>
                   <td class="text-h5 font-weight-medium">{{ truck.dock_code }}</td>
                   <td class="text-h5 font-weight-medium">{{ truck.truck_route }}</td>
                   <td>

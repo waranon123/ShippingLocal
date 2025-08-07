@@ -1,4 +1,3 @@
-<!-- frontend/src/views/ManagementView.vue -->
 <template>
   <v-container fluid>
     <v-row>
@@ -111,8 +110,8 @@
                     :rules="[v => !!v || 'Terminal is required']" required></v-text-field>
                 </v-col>
                 <v-col cols="12" sm="6">
-                  <v-text-field v-model="editedItem.truck_no" label="Truck No."
-                    :rules="[v => !!v || 'Truck No. is required']" required></v-text-field>
+                  <v-text-field v-model="editedItem.shipping_no" label="Shipping No."
+                    :rules="[v => !!v || 'Shipping No. is required']" required></v-text-field>
                 </v-col>
                 <v-col cols="12" sm="6">
                   <v-text-field v-model="editedItem.dock_code" label="Dock Code"
@@ -213,7 +212,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { useTruckStore } from '@/stores/trucks'
-import { useSnackbarStore } from '@/stores/snackbar' // เพิ่มการ import
+import { useSnackbarStore } from '@/stores/snackbar'
 import ExcelImport from '@/components/ExcelImport.vue'
 import axios from 'axios'
 import { saveAs } from 'file-saver'
@@ -221,7 +220,7 @@ import DateFilter from '@/components/DateFilter.vue'
 
 const authStore = useAuthStore()
 const truckStore = useTruckStore()
-const snackbarStore = useSnackbarStore() // ใช้งาน snackbar store
+const snackbarStore = useSnackbarStore()
 
 // Data
 const dialog = ref(false)
@@ -245,7 +244,7 @@ const dateTo = ref(null)
 
 const editedItem = ref({
   terminal: '',
-  truck_no: '',
+  shipping_no: '',  // Changed from truck_no
   dock_code: '',
   truck_route: '',
   preparation_start: '',
@@ -258,7 +257,7 @@ const editedItem = ref({
 
 const defaultItem = {
   terminal: '',
-  truck_no: '',
+  shipping_no: '',  // Changed from truck_no
   dock_code: '',
   truck_route: '',
   preparation_start: '',
@@ -273,7 +272,7 @@ const statusOptions = ['On Process', 'Delay', 'Finished']
 
 const headers = [
   { title: 'Terminal', key: 'terminal' },
-  { title: 'Truck No.', key: 'truck_no' },
+  { title: 'Shipping No.', key: 'shipping_no' },  // Changed from Truck No.
   { title: 'Dock Code', key: 'dock_code' },
   { title: 'Truck Route', key: 'truck_route' },
   { title: 'Prep. Start', key: 'preparation_start' },
@@ -359,35 +358,19 @@ const close = () => {
   }, 300)
 }
 
-const checkTruckNoExists = async (truckNo) => {
-  try {
-    const response = await axios.get('/api/trucks', { params: { truck_no: truckNo } })
-    return response.data.length > 0
-  } catch (error) {
-    console.error('Error checking truck number:', error)
-    return false
-  }
-}
-
 const save = async () => {
   const { valid } = await form.value.validate()
   if (!valid) return
 
- try {
+  try {
     if (editedIndex.value > -1) {
       await truckStore.updateTruck(trucks.value[editedIndex.value].id, editedItem.value)
       snackbarStore.success('Truck updated successfully')
     } else {
-      // ลบการตรวจสอบ truck_no ที่ซ้ำ
-      // const exists = await checkTruckNoExists(editedItem.value.truck_no)
-      // if (exists) {
-      //   snackbarStore.error(`Truck number '${editedItem.value.truck_no}' already exists`)
-      //   return
-      // }
       await truckStore.createTruck(editedItem.value)
+      // Don't manually refresh here, let WebSocket handle it
       snackbarStore.success('Truck created successfully')
     }
-    close()
     close()
   } catch (error) {
     console.error('Failed to save truck:', error)
@@ -499,6 +482,7 @@ const bulkDelete = async () => {
 
 onMounted(() => {
   truckStore.fetchTrucks()
+  truckStore.connectWebSocket()
 })
 </script>
 

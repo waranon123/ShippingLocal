@@ -1,8 +1,6 @@
-# app/schemas.py - Updated for Pydantic V2
 from pydantic import BaseModel
 from typing import Optional
-from datetime import time, datetime
-from uuid import UUID
+from datetime import datetime
 from enum import Enum
 
 class StatusEnum(str, Enum):
@@ -12,38 +10,38 @@ class StatusEnum(str, Enum):
 
 class TruckBase(BaseModel):
     terminal: str
-    truck_no: str
+    shipping_no: str  # Changed from truck_no
     dock_code: str
     truck_route: str
-    preparation_start: Optional[time] = None
-    preparation_end: Optional[time] = None
-    loading_start: Optional[time] = None
-    loading_end: Optional[time] = None
-    status_preparation: StatusEnum = StatusEnum.ON_PROCESS
-    status_loading: StatusEnum = StatusEnum.ON_PROCESS
+    preparation_start: Optional[str] = None
+    preparation_end: Optional[str] = None
+    loading_start: Optional[str] = None
+    loading_end: Optional[str] = None
+    status_preparation: str = "On Process"
+    status_loading: str = "On Process"
 
 class TruckCreate(TruckBase):
     pass
 
 class TruckUpdate(BaseModel):
     terminal: Optional[str] = None
-    truck_no: Optional[str] = None
+    shipping_no: Optional[str] = None  # Changed from truck_no
     dock_code: Optional[str] = None
     truck_route: Optional[str] = None
-    preparation_start: Optional[time] = None
-    preparation_end: Optional[time] = None
-    loading_start: Optional[time] = None
-    loading_end: Optional[time] = None
-    status_preparation: Optional[StatusEnum] = None
-    status_loading: Optional[StatusEnum] = None
+    preparation_start: Optional[str] = None
+    preparation_end: Optional[str] = None
+    loading_start: Optional[str] = None
+    loading_end: Optional[str] = None
+    status_preparation: Optional[str] = None
+    status_loading: Optional[str] = None
 
 class Truck(TruckBase):
-    id: UUID
+    id: str
     created_at: datetime
-    updated_at: Optional[datetime]
+    updated_at: Optional[datetime] = None
     
     class Config:
-        from_attributes = True  # Changed from orm_mode
+        from_attributes = True
 
 class UserLogin(BaseModel):
     username: str
@@ -55,9 +53,9 @@ class Token(BaseModel):
     role: str
 
 class UserResponse(BaseModel):
-    id: UUID
+    id: str
     username: str
     role: str
     
     class Config:
-        from_attributes = True  # Changed from orm_mode
+        from_attributes = True

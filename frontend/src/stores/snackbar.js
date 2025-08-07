@@ -1,4 +1,3 @@
-// frontend/src/stores/snackbar.js
 import { defineStore } from 'pinia'
 
 export const useSnackbarStore = defineStore('snackbar', {

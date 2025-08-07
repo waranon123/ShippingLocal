@@ -1,3 +1,4 @@
+// src/components/StatusChip.vue
 <template>
   <v-chip
     :color="chipColor"

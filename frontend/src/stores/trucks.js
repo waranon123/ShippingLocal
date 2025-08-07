@@ -1,6 +1,9 @@
-
 import { defineStore } from 'pinia'
 import axios from 'axios'
+
+// Add ngrok bypass headers
+axios.defaults.headers.common['ngrok-skip-browser-warning'] = 'true'
+axios.defaults.headers.common['User-Agent'] = 'TruckManagementSystem/1.0'
 
 export const useTruckStore = defineStore('trucks', {
   state: () => ({
@@ -23,6 +26,8 @@ export const useTruckStore = defineStore('trucks', {
   actions: {
     async fetchTrucks(filters = {}) {
       this.loading = true
+      this.error = null
+      
       try {
         const allFilters = {
           ...filters,
@@ -37,11 +42,38 @@ export const useTruckStore = defineStore('trucks', {
         })
 
         const params = new URLSearchParams(allFilters)
-        const response = await axios.get(`/api/trucks?${params}`)
-        this.trucks = response.data || []
+        console.log('🚚 Fetching trucks with params:', params.toString())
+        
+        const response = await axios.get(`/api/trucks?${params}`, {
+          headers: {
+            'ngrok-skip-browser-warning': 'true',
+            'User-Agent': 'TruckManagementSystem/1.0',
+            'Accept': 'application/json'
+          }
+        })
+        
+        console.log('📦 Raw response data:', response.data)
+        
+        // Validate response is array
+        if (Array.isArray(response.data)) {
+          this.trucks = response.data
+          console.log('✅ Trucks loaded successfully:', this.trucks.length, 'items')
+        } else if (typeof response.data === 'string' && response.data.includes('<!DOCTYPE html>')) {
+          throw new Error('Received HTML instead of JSON - Ngrok browser warning detected')
+        } else {
+          console.warn('⚠️ Unexpected response format:', typeof response.data, response.data)
+          this.trucks = []
+        }
+        
       } catch (error) {
-        this.error = error.message
+        console.error('❌ Failed to fetch trucks:', error)
+        this.error = error.message || 'Failed to fetch trucks'
         this.trucks = []
+        
+        // Show user-friendly error for ngrok issues
+        if (error.message.includes('Ngrok') || error.message.includes('HTML')) {
+          this.error = 'API not accessible - check backend URL and ngrok tunnel'
+        }
       } finally {
         this.loading = false
       }
@@ -67,13 +99,26 @@ export const useTruckStore = defineStore('trucks', {
         })
 
         const params = new URLSearchParams(allFilters)
-        const response = await axios.get(`/api/stats?${params}`)
-        this.stats = response.data || {
-          total_trucks: 0,
-          preparation_stats: { 'On Process': 0, Delay: 0, Finished: 0 },
-          loading_stats: { 'On Process': 0, Delay: 0, Finished: 0 },
-          terminal_stats: {}
+        const response = await axios.get(`/api/stats?${params}`, {
+          headers: {
+            'ngrok-skip-browser-warning': 'true',
+            'User-Agent': 'TruckManagementSystem/1.0',
+            'Accept': 'application/json'
+          }
+        })
+        
+        if (typeof response.data === 'object' && !Array.isArray(response.data)) {
+          this.stats = response.data
+        } else {
+          console.warn('⚠️ Unexpected stats response:', response.data)
+          this.stats = {
+            total_trucks: 0,
+            preparation_stats: { 'On Process': 0, Delay: 0, Finished: 0 },
+            loading_stats: { 'On Process': 0, Delay: 0, Finished: 0 },
+            terminal_stats: {}
+          }
         }
+        
         return this.stats
       } catch (error) {
         console.error('Failed to fetch stats:', error)
@@ -89,7 +134,14 @@ export const useTruckStore = defineStore('trucks', {
 
     async createTruck(truckData) {
       try {
-        const response = await axios.post('/api/trucks', truckData)
+        const response = await axios.post('/api/trucks', truckData, {
+          headers: {
+            'ngrok-skip-browser-warning': 'true',
+            'User-Agent': 'TruckManagementSystem/1.0',
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+          }
+        })
         return response.data
       } catch (error) {
         throw error
@@ -98,7 +150,14 @@ export const useTruckStore = defineStore('trucks', {
 
     async updateTruck(id, truckData) {
       try {
-        const response = await axios.put(`/api/trucks/${id}`, truckData)
+        const response = await axios.put(`/api/trucks/${id}`, truckData, {
+          headers: {
+            'ngrok-skip-browser-warning': 'true',
+            'User-Agent': 'TruckManagementSystem/1.0',
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+          }
+        })
         return response.data
       } catch (error) {
         throw error
@@ -107,7 +166,12 @@ export const useTruckStore = defineStore('trucks', {
 
     async deleteTruck(id) {
       try {
-        await axios.delete(`/api/trucks/${id}`)
+        await axios.delete(`/api/trucks/${id}`, {
+          headers: {
+            'ngrok-skip-browser-warning': 'true',
+            'User-Agent': 'TruckManagementSystem/1.0'
+          }
+        })
       } catch (error) {
         throw error
       }
@@ -116,7 +180,12 @@ export const useTruckStore = defineStore('trucks', {
     async updateStatus(id, statusType, status) {
       try {
         const response = await axios.patch(`/api/trucks/${id}/status`, null, {
-          params: { status_type: statusType, status }
+          params: { status_type: statusType, status },
+          headers: {
+            'ngrok-skip-browser-warning': 'true',
+            'User-Agent': 'TruckManagementSystem/1.0',
+            'Accept': 'application/json'
+          }
         })
         return response.data
       } catch (error) {
@@ -126,23 +195,28 @@ export const useTruckStore = defineStore('trucks', {
 
     connectWebSocket() {
       const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      this.websocket = new WebSocket(`${wsProtocol}//${window.location.host}/ws`)
+      const wsUrl = import.meta.env.VITE_WS_URL || `${wsProtocol}//${window.location.host}/ws`
+      
+      console.log('🔌 Connecting WebSocket to:', wsUrl)
+      this.websocket = new WebSocket(wsUrl)
 
       this.websocket.onmessage = async (event) => {
         const message = JSON.parse(event.data)
 
         switch (message.type) {
           case 'truck_created':
-            if (this.isWithinDateFilter(message.data.created_at)) {
-              this.trucks.push(message.data)
+            // Check if truck already exists to prevent duplicates
+            const existingIndex = this.trucks.findIndex(t => t.id === message.data.id)
+            if (existingIndex === -1 && this.isWithinDateFilter(message.data.created_at)) {
+              this.trucks.unshift(message.data) // Add to beginning of array
               await this.fetchStats() // Refresh stats on truck creation
             }
             break
           case 'truck_updated':
           case 'status_updated':
-            const index = this.trucks.findIndex(t => t.id === message.data.id)
-            if (index !== -1) {
-              this.trucks[index] = message.data
+            const updateIndex = this.trucks.findIndex(t => t.id === message.data.id)
+            if (updateIndex !== -1) {
+              this.trucks[updateIndex] = message.data
               await this.fetchStats() // Refresh stats on update
             }
             break
@@ -155,6 +229,14 @@ export const useTruckStore = defineStore('trucks', {
 
       this.websocket.onerror = (error) => {
         console.error('WebSocket error:', error)
+      }
+      
+      this.websocket.onopen = () => {
+        console.log('✅ WebSocket connected')
+      }
+      
+      this.websocket.onclose = () => {
+        console.log('🔌 WebSocket disconnected')
       }
     },
 

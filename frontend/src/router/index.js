@@ -1,57 +1,85 @@
-// frontend/src/router/index.js
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+
+// Import views
+import LoginView from '@/views/LoginView.vue'
+import DashboardView from '@/views/DashboardView.vue'
+import TVView from '@/views/TVView.vue'
+import StatisticsView from '@/views/StatisticsView.vue'
+import ManagementView from '@/views/ManagementView.vue'
+import UsermanagementView from '../components/๊UsermanagementView.vue'
+
+const routes = [
+  {
+    path: '/',
+    redirect: '/login'
+  },
+  {
+    path: '/login',
+    name: 'login',
+    component: LoginView,
+    meta: { requiresAuth: false }
+  },
+  {
+    path: '/dashboard',
+    name: 'dashboard',
+    component: DashboardView,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/tv',
+    name: 'tv',
+    component: TVView,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/statistics',
+    name: 'statistics',
+    component: StatisticsView,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/management',
+    name: 'management',
+    component: ManagementView,
+    meta: { requiresAuth: true, requiresRole: 'user' }
+  },
+  {
+    path: '/users',
+    name: 'users',
+    component: UsermanagementView,
+    meta: { requiresAuth: true, requiresRole: 'admin' }
+  }
+]
+
 const router = createRouter({
   history: createWebHistory(),
-  routes: [
-    {
-      path: '/',
-      redirect: '/dashboard'
-    },
-    {
-      path: '/login',
-      name: 'login',
-      component: () => import('@/views/LoginView.vue'),
-      meta: { requiresAuth: false }
-    },
-    {
-      path: '/dashboard',
-      name: 'dashboard',
-      component: () => import('@/views/DashboardView.vue'),
-      meta: { requiresAuth: true }
-    },
-    {
-      path: '/management',
-      name: 'management',
-      component: () => import('@/views/ManagementView.vue'),
-      meta: { requiresAuth: true, requiredRole: 'user' }
-    },
-    {
-      path: '/statistics',
-      name: 'statistics',
-      component: () => import('@/views/StatisticsView.vue'),
-      meta: { requiresAuth: true }
-    },
-    {
-      path: '/tv',
-      name: 'tv',
-      component: () => import('@/views/TVView.vue'),
-      meta: { requiresAuth: true }
-    }
-  ]
+  routes
 })
 
 // Navigation guard
 router.beforeEach((to, from, next) => {
   const authStore = useAuthStore()
   
+  // Check if route requires authentication
   if (to.meta.requiresAuth && !authStore.isAuthenticated) {
     next('/login')
-  } else if (to.meta.requiredRole && !authStore.hasRole(to.meta.requiredRole)) {
-    next('/dashboard')
-  } else {
-    next()
+    return
   }
+  
+  // Check role requirements
+  if (to.meta.requiresRole && !authStore.hasRole(to.meta.requiresRole)) {
+    next('/dashboard')
+    return
+  }
+  
+  // If already authenticated and trying to access login, redirect to dashboard
+  if (to.name === 'login' && authStore.isAuthenticated) {
+    next('/dashboard')
+    return
+  }
+  
+  next()
 })
 
 export default router

@@ -1,4 +1,3 @@
-<!-- frontend/src/components/DateFilter.vue -->
 <template>
   <v-row align="center" class="mb-4">
     <v-col cols="12" md="5">

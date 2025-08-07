@@ -1,4 +1,3 @@
-<!-- frontend/src/components/ExcelImport.vue -->
 <template>
   <v-dialog v-model="dialog" max-width="800px">
     <template v-slot:activator="{ props }">
@@ -213,7 +212,7 @@
                       :key="index"
                     >
                       <v-list-item-title>
-                        Row {{ fail.row }}: {{ fail.truck_no }}
+                        Row {{ fail.row }}: {{ fail.shipping_no }}
                       </v-list-item-title>
                       <v-list-item-subtitle>
                         {{ fail.error }}
@@ -255,8 +254,8 @@ const file = ref(null)
 const uploading = ref(false)
 const importing = ref(false)
 
-// Column definitions
-const requiredColumns = ['Terminal', 'Truck No', 'Dock Code', 'Route']
+// Column definitions - Updated for Shipping No.
+const requiredColumns = ['Terminal', 'Shipping No', 'Dock Code', 'Route']
 const optionalColumns = ['Prep Start', 'Prep End', 'Load Start', 'Load End', 'Status Prep', 'Status Load']
 
 // Validation rules
@@ -283,10 +282,10 @@ const importResult = ref({
   failed_details: []
 })
 
-// Table headers for preview
+// Table headers for preview - Updated for Shipping No.
 const previewHeaders = [
   { title: 'Terminal', key: 'terminal' },
-  { title: 'Truck No', key: 'truck_no' },
+  { title: 'Shipping No', key: 'shipping_no' },
   { title: 'Dock Code', key: 'dock_code' },
   { title: 'Route', key: 'truck_route' },
   { title: 'Prep Status', key: 'status_preparation' },

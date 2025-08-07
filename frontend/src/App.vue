@@ -19,6 +19,14 @@
         ></v-list-item>
         
         <v-list-item
+          v-if="isAdmin"
+          prepend-icon="mdi-account-group"
+          title="User Management"
+          value="users"
+          :to="{ name: 'users' }"
+        ></v-list-item>
+        
+        <v-list-item
           prepend-icon="mdi-chart-box"
           title="Statistics"
           value="statistics"
@@ -67,7 +75,6 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import axios from 'axios'
-import API_BASE_URL from '@/config/api'
 
 const router = useRouter()
 const route = useRoute()
@@ -81,6 +88,7 @@ const showNavigation = computed(() => {
 
 const user = computed(() => authStore.user)
 const canManage = computed(() => authStore.hasRole('user'))
+const isAdmin = computed(() => authStore.hasRole('admin'))
 
 const logout = () => {
   authStore.logout()
@@ -89,6 +97,7 @@ const logout = () => {
 
 onMounted(() => {
   // Set base URL
+  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
   axios.defaults.baseURL = API_BASE_URL
   
   // Request interceptor
@@ -122,3 +131,17 @@ onMounted(() => {
   }
 })
 </script>
+
+<style>
+.v-application {
+  font-family: 'Roboto', sans-serif;
+}
+
+.v-toolbar-title {
+  font-weight: 600;
+}
+
+.v-chip {
+  font-weight: 500;
+}
+</style>

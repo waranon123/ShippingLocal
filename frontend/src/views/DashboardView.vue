@@ -1,4 +1,3 @@
-<!-- frontend/src/views/DashboardView.vue - เพิ่ม Date Filter -->
 <template>
   <v-container fluid>
     <v-row>
@@ -79,9 +78,94 @@
       </v-col>
     </v-row>
     
-    <!-- Edit Dialog (unchanged) -->
-    <v-dialog v-model="dialog" max-width="500px">
-      <!-- ... existing dialog content ... -->
+    <!-- Edit Dialog -->
+    <v-dialog v-model="dialog" max-width="600px">
+      <v-card>
+        <v-card-title>
+          <span class="text-h5">{{ editedIndex === -1 ? 'New Truck' : 'Edit Truck' }}</span>
+        </v-card-title>
+        <v-card-text>
+          <v-form ref="form" v-model="valid">
+            <v-container>
+              <v-row>
+                <v-col cols="12" sm="6">
+                  <v-text-field 
+                    v-model="editedItem.terminal" 
+                    label="Terminal"
+                    :rules="[v => !!v || 'Terminal is required']" 
+                    required
+                  ></v-text-field>
+                </v-col>
+                <v-col cols="12" sm="6">
+                  <v-text-field 
+                    v-model="editedItem.shipping_no" 
+                    label="Shipping No."
+                    :rules="[v => !!v || 'Shipping No. is required']" 
+                    required
+                  ></v-text-field>
+                </v-col>
+                <v-col cols="12" sm="6">
+                  <v-text-field 
+                    v-model="editedItem.dock_code" 
+                    label="Dock Code"
+                    :rules="[v => !!v || 'Dock Code is required']" 
+                    required
+                  ></v-text-field>
+                </v-col>
+                <v-col cols="12" sm="6">
+                  <v-text-field 
+                    v-model="editedItem.truck_route" 
+                    label="Truck Route"
+                    :rules="[v => !!v || 'Truck Route is required']" 
+                    required
+                  ></v-text-field>
+                </v-col>
+                <v-col cols="12">
+                  <v-divider></v-divider>
+                  <div class="text-subtitle-1 mt-2">Preparation Times</div>
+                </v-col>
+                <v-col cols="12" sm="6">
+                  <v-text-field 
+                    v-model="editedItem.preparation_start" 
+                    label="Start Time" 
+                    type="time"
+                  ></v-text-field>
+                </v-col>
+                <v-col cols="12" sm="6">
+                  <v-text-field 
+                    v-model="editedItem.preparation_end" 
+                    label="End Time" 
+                    type="time"
+                  ></v-text-field>
+                </v-col>
+                <v-col cols="12">
+                  <v-divider></v-divider>
+                  <div class="text-subtitle-1 mt-2">Loading Times</div>
+                </v-col>
+                <v-col cols="12" sm="6">
+                  <v-text-field 
+                    v-model="editedItem.loading_start" 
+                    label="Start Time" 
+                    type="time"
+                  ></v-text-field>
+                </v-col>
+                <v-col cols="12" sm="6">
+                  <v-text-field 
+                    v-model="editedItem.loading_end" 
+                    label="End Time" 
+                    type="time"
+                  ></v-text-field>
+                </v-col>
+              </v-row>
+            </v-container>
+          </v-form>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer></v-spacer>
+          <v-btn color="blue-darken-1" variant="text" @click="close">Cancel</v-btn>
+          <v-btn color="blue-darken-1" variant="text" @click="save" :disabled="!valid">Save</v-btn>
+        </v-card-actions>
+      </v-card>
     </v-dialog>
   </v-container>
 </template>
@@ -104,9 +188,11 @@ const dateTo = ref(null)
 const search = ref('')
 const dialog = ref(false)
 const editedIndex = ref(-1)
+const valid = ref(false)
+const form = ref(null)
 const editedItem = ref({
   terminal: '',
-  truck_no: '',
+  shipping_no: '',  // Changed from truck_no
   dock_code: '',
   truck_route: '',
   preparation_start: '',
@@ -117,7 +203,7 @@ const editedItem = ref({
 
 const defaultItem = {
   terminal: '',
-  truck_no: '',
+  shipping_no: '',  // Changed from truck_no
   dock_code: '',
   truck_route: '',
   preparation_start: '',
@@ -129,7 +215,7 @@ const defaultItem = {
 const headers = [
   { title: 'Date', key: 'created_at' },
   { title: 'Terminal', key: 'terminal' },
-  { title: 'Truck No.', key: 'truck_no' },
+  { title: 'Shipping No.', key: 'shipping_no' },  // Changed from Truck No.
   { title: 'Dock Code', key: 'dock_code' },
   { title: 'Truck Route', key: 'truck_route' },
   { title: 'Prep. Start', key: 'preparation_start' },
@@ -138,7 +224,7 @@ const headers = [
   { title: 'Loading End', key: 'loading_end' },
   { title: 'Prep. Status', key: 'status_preparation' },
   { title: 'Loading Status', key: 'status_loading' },
- // { title: 'Actions', key: 'actions', sortable: false }
+  //{ title: 'Actions', key: 'actions', sortable: false }
 ]
 
 const loading = computed(() => truckStore.loading)
@@ -198,16 +284,22 @@ const deleteItem = async (item) => {
 
 const close = () => {
   dialog.value = false
-  editedItem.value = Object.assign({}, defaultItem)
-  editedIndex.value = -1
+  setTimeout(() => {
+    editedItem.value = Object.assign({}, defaultItem)
+    editedIndex.value = -1
+  }, 300)
 }
 
 const save = async () => {
+  const { valid } = await form.value.validate()
+  if (!valid) return
+  
   try {
     if (editedIndex.value > -1) {
       await truckStore.updateTruck(trucks.value[editedIndex.value].id, editedItem.value)
     } else {
       await truckStore.createTruck(editedItem.value)
+      // Don't manually refresh here, let WebSocket handle it
     }
     close()
   } catch (error) {
@@ -237,5 +329,6 @@ const exportCSV = () => {
 
 onMounted(() => {
   truckStore.fetchTrucks()
+  truckStore.connectWebSocket()
 })
 </script>
