@@ -7,7 +7,7 @@ import DashboardView from '@/views/DashboardView.vue'
 import TVView from '@/views/TVView.vue'
 import StatisticsView from '@/views/StatisticsView.vue'
 import ManagementView from '@/views/ManagementView.vue'
-import UsermanagementView from '../components/๊UsermanagementView.vue'
+import UsermanagementView from '@/components/UsermanagementView.vue'
 
 const routes = [
   {

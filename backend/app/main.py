@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import and_, func  # Add func import here
 from typing import List, Optional
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
@@ -14,7 +15,6 @@ import json
 import uuid
 import io
 import xlsxwriter
-from sqlalchemy import and_
 import math
 from calendar import monthrange
 from datetime import datetime, date
@@ -29,7 +29,7 @@ create_tables()
 
 app = FastAPI(title="Truck Management System API - Local Database")
 
-# CORS - อัปเดตให้รองรับ ngrok และ tunnel services
+# CORS - Updated for tunnel services
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -48,6 +48,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Configuration
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "fallback-secret-key-for-dev")
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+JWT_EXPIRATION_MINUTES = int(os.getenv("JWT_EXPIRATION_MINUTES", "60"))
 
 # Configuration
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "fallback-secret-key-for-dev")
@@ -94,6 +99,7 @@ def clean_for_json(data):
         return None
     else:
         return data
+
 def verify_password(plain_password, hashed_password):
     return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
 
@@ -119,16 +125,25 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
     try:
         payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
         username: str = payload.get("sub")
+        role: str = payload.get("role", "viewer")
+        is_guest: bool = payload.get("is_guest", False)
+        
         if username is None:
             raise credentials_exception
+            
+        # Handle guest user
+        if is_guest and username == "guest_viewer":
+            return UserResponse(id="guest", username="Guest Viewer", role="viewer")
+        
+        # Handle regular user
+        user = db.query(User).filter(User.username == username).first()
+        if not user:
+            raise credentials_exception
+        
+        return UserResponse(id=user.id, username=user.username, role=user.role)
+        
     except JWTError:
         raise credentials_exception
-    
-    user = db.query(User).filter(User.username == username).first()
-    if not user:
-        raise credentials_exception
-    
-    return UserResponse(id=user.id, username=user.username, role=user.role)
 
 def check_permission(required_role: str):
     def permission_checker(current_user: UserResponse = Depends(get_current_user)):
@@ -143,6 +158,7 @@ def check_permission(required_role: str):
 
 # Initialize default admin user
 def init_default_user():
+    from .models import SessionLocal
     db = SessionLocal()
     try:
         existing_user = db.query(User).filter(User.username == "admin").first()
@@ -186,6 +202,7 @@ def read_root():
         }
     }
 
+
 @app.get("/health")
 async def health_check(db: Session = Depends(get_db)):
     try:
@@ -203,6 +220,30 @@ async def health_check(db: Session = Depends(get_db)):
             "error": str(e),
             "timestamp": datetime.utcnow().isoformat()
         }
+
+@app.post("/api/auth/login", response_model=Token)
+async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.username == form_data.username).first()
+    
+    if not user or not verify_password(form_data.password, user.password_hash):
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    access_token_expires = timedelta(minutes=JWT_EXPIRATION_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user.username, "role": user.role},
+        expires_delta=access_token_expires
+    )
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "role": user.role
+    }
+
 
 @app.post("/api/auth/login", response_model=Token)
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
@@ -301,6 +342,7 @@ async def guest_login():
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Guest login failed: {str(e)}")
+
 
 # Update get_current_user to handle guest tokens
 async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
@@ -807,6 +849,7 @@ async def preview_excel_import(
         raise HTTPException(400, f"Error reading Excel file: {str(e)}")
 
 # Update the confirm import endpoint
+# Updated confirm import endpoint with fixed func import
 @app.post("/api/trucks/import/confirm")
 async def confirm_excel_import(
     data: dict,
@@ -841,10 +884,12 @@ async def confirm_excel_import(
                         
                         # Check if record already exists for this date
                         record_date = date(year, month, day)
+                        
+                        # Fixed: Use func imported from sqlalchemy
                         existing = db.query(Truck).filter(
                             and_(
                                 Truck.shipping_no == daily_shipping_no,
-                                db.func.date(Truck.created_at) == record_date
+                                func.date(Truck.created_at) == record_date  # Fixed: Use func here
                             )
                         ).first()
                         
@@ -900,21 +945,28 @@ async def confirm_excel_import(
                             })
                             
                     except Exception as day_error:
+                        print(f"❌ Day error for template {template_index + 1}, day {day}: {str(day_error)}")
                         failed_imports.append({
                             "template": template_index + 1,
                             "day": day,
                             "shipping_no": f"{truck_template.get('shipping_no', 'Unknown')}_{year:04d}{month:02d}{day:02d}",
                             "error": str(day_error)
                         })
+                        db.rollback()  # Rollback failed transaction
                         
             except Exception as template_error:
+                print(f"❌ Template error for template {template_index + 1}: {str(template_error)}")
                 failed_imports.append({
                     "template": template_index + 1,
                     "shipping_no": truck_template.get('shipping_no', 'Unknown'),
                     "error": str(template_error)
                 })
         
-        del import_sessions[session_id]
+        # Clean up session
+        if session_id in import_sessions:
+            del import_sessions[session_id]
+        
+        print(f"✅ Import completed: {imported_count} imported, {len(failed_imports)} failed")
         
         return clean_for_json({
             "success": True,
@@ -925,8 +977,16 @@ async def confirm_excel_import(
         })
         
     except Exception as e:
+        print(f"❌ Import exception: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        
+        # Clean up session on error
+        if session_id in import_sessions:
+            del import_sessions[session_id]
+            
         raise HTTPException(500, f"Import failed: {str(e)}")
-
+    
 @app.get("/api/trucks/{truck_id}")
 async def get_truck(
     truck_id: str,

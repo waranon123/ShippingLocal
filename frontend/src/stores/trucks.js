@@ -1,4 +1,4 @@
-// frontend/src/stores/trucks.js - Fixed unsafe headers
+// frontend/src/stores/trucks.js - Fixed with better error handling
 
 import { defineStore } from 'pinia'
 import axios from 'axios'
@@ -22,6 +22,21 @@ export const useTruckStore = defineStore('trucks', {
   }),
 
   actions: {
+    // Validate truck data
+    validateTruck(truck) {
+      if (!truck || typeof truck !== 'object') {
+        console.warn('⚠️ Invalid truck object:', truck)
+        return false
+      }
+      
+      if (!truck.id || typeof truck.id !== 'string') {
+        console.warn('⚠️ Truck missing valid ID:', truck)
+        return false
+      }
+      
+      return true
+    },
+
     async fetchTrucks(filters = {}) {
       this.loading = true
       this.error = null
@@ -56,8 +71,17 @@ export const useTruckStore = defineStore('trucks', {
         
         // Validate response is array
         if (Array.isArray(response.data)) {
-          this.trucks = response.data
-          console.log('✅ Trucks loaded successfully:', this.trucks.length, 'items')
+          // Filter and validate truck data
+          const validTrucks = response.data.filter(truck => {
+            const isValid = this.validateTruck(truck)
+            if (!isValid) {
+              console.warn('⚠️ Filtering out invalid truck:', truck)
+            }
+            return isValid
+          })
+          
+          this.trucks = validTrucks
+          console.log('✅ Trucks loaded successfully:', this.trucks.length, 'valid items')
           
           // Log sample data for debugging
           if (this.trucks.length > 0) {
@@ -163,7 +187,13 @@ export const useTruckStore = defineStore('trucks', {
           }
         })
         console.log('✅ Truck created:', response.data)
-        return response.data
+        
+        // Validate created truck data
+        if (this.validateTruck(response.data)) {
+          return response.data
+        } else {
+          throw new Error('Invalid truck data returned from server')
+        }
       } catch (error) {
         console.error('❌ Failed to create truck:', error)
         throw error
@@ -172,6 +202,11 @@ export const useTruckStore = defineStore('trucks', {
 
     async updateTruck(id, truckData) {
       try {
+        // Validate ID
+        if (!id || typeof id !== 'string') {
+          throw new Error('Invalid truck ID provided')
+        }
+        
         console.log('🔄 Updating truck:', id, truckData)
         const response = await axios.put(`/api/trucks/${id}`, truckData, {
           headers: {
@@ -180,7 +215,18 @@ export const useTruckStore = defineStore('trucks', {
           }
         })
         console.log('✅ Truck updated:', response.data)
-        return response.data
+        
+        // Validate updated truck data
+        if (this.validateTruck(response.data)) {
+          // Update local state
+          const index = this.trucks.findIndex(t => t.id === id)
+          if (index !== -1) {
+            this.trucks[index] = response.data
+          }
+          return response.data
+        } else {
+          throw new Error('Invalid truck data returned from server')
+        }
       } catch (error) {
         console.error('❌ Failed to update truck:', error)
         throw error
@@ -189,6 +235,11 @@ export const useTruckStore = defineStore('trucks', {
 
     async deleteTruck(id) {
       try {
+        // Validate ID
+        if (!id || typeof id !== 'string') {
+          throw new Error('Invalid truck ID provided for deletion')
+        }
+        
         console.log('🗑️ Deleting truck:', id)
         await axios.delete(`/api/trucks/${id}`, {
           headers: {
@@ -196,14 +247,39 @@ export const useTruckStore = defineStore('trucks', {
           }
         })
         console.log('✅ Truck deleted:', id)
+        
+        // Remove from local state
+        this.trucks = this.trucks.filter(t => t.id !== id)
+        
       } catch (error) {
         console.error('❌ Failed to delete truck:', error)
-        throw error
+        
+        // Provide more specific error messages
+        if (error.response?.status === 404) {
+          throw new Error('Truck not found - it may have already been deleted')
+        } else if (error.response?.status === 403) {
+          throw new Error('Permission denied - you cannot delete this truck')
+        } else {
+          throw new Error(`Delete failed: ${error.message || 'Unknown error'}`)
+        }
       }
     },
 
     async updateStatus(id, statusType, status) {
       try {
+        // Validate parameters
+        if (!id || typeof id !== 'string') {
+          throw new Error('Invalid truck ID provided for status update')
+        }
+        
+        if (!['preparation', 'loading'].includes(statusType)) {
+          throw new Error('Invalid status type. Must be "preparation" or "loading"')
+        }
+        
+        if (!['On Process', 'Delay', 'Finished'].includes(status)) {
+          throw new Error('Invalid status value')
+        }
+        
         console.log('🔄 Updating status:', { id, statusType, status })
         const response = await axios.patch(`/api/trucks/${id}/status`, null, {
           params: { status_type: statusType, status },
@@ -212,10 +288,28 @@ export const useTruckStore = defineStore('trucks', {
           }
         })
         console.log('✅ Status updated:', response.data)
-        return response.data
+        
+        // Validate and update local state
+        if (this.validateTruck(response.data)) {
+          const index = this.trucks.findIndex(t => t.id === id)
+          if (index !== -1) {
+            this.trucks[index] = response.data
+          }
+          return response.data
+        } else {
+          throw new Error('Invalid truck data returned from server')
+        }
       } catch (error) {
         console.error('❌ Failed to update status:', error)
-        throw error
+        
+        // Provide more specific error messages
+        if (error.response?.status === 404) {
+          throw new Error('Truck not found for status update')
+        } else if (error.response?.status === 403) {
+          throw new Error('Permission denied for status update')
+        } else {
+          throw new Error(`Status update failed: ${error.message || 'Unknown error'}`)
+        }
       }
     },
 
@@ -241,26 +335,36 @@ export const useTruckStore = defineStore('trucks', {
 
             switch (message.type) {
               case 'truck_created':
-                const existingIndex = this.trucks.findIndex(t => t.id === message.data.id)
-                if (existingIndex === -1 && this.isWithinDateFilter(message.data.created_at)) {
-                  this.trucks.unshift(message.data)
-                  console.log('✅ New truck added to store:', message.data.id)
+                if (this.validateTruck(message.data) && this.isWithinDateFilter(message.data.created_at)) {
+                  // Check if truck already exists to avoid duplicates
+                  const existingIndex = this.trucks.findIndex(t => t.id === message.data.id)
+                  if (existingIndex === -1) {
+                    this.trucks.unshift(message.data)
+                    console.log('✅ New truck added to store:', message.data.id)
+                  } else {
+                    console.log('⚠️ Truck already exists, updating:', message.data.id)
+                    this.trucks[existingIndex] = message.data
+                  }
                   await this.fetchStats()
                 }
                 break
               case 'truck_updated':
               case 'status_updated':
-                const updateIndex = this.trucks.findIndex(t => t.id === message.data.id)
-                if (updateIndex !== -1) {
-                  this.trucks[updateIndex] = message.data
-                  console.log('✅ Truck updated in store:', message.data.id)
-                  await this.fetchStats()
+                if (this.validateTruck(message.data)) {
+                  const updateIndex = this.trucks.findIndex(t => t.id === message.data.id)
+                  if (updateIndex !== -1) {
+                    this.trucks[updateIndex] = message.data
+                    console.log('✅ Truck updated in store:', message.data.id)
+                    await this.fetchStats()
+                  }
                 }
                 break
               case 'truck_deleted':
-                this.trucks = this.trucks.filter(t => t.id !== message.data.id)
-                console.log('✅ Truck removed from store:', message.data.id)
-                await this.fetchStats()
+                if (message.data && message.data.id) {
+                  this.trucks = this.trucks.filter(t => t.id !== message.data.id)
+                  console.log('✅ Truck removed from store:', message.data.id)
+                  await this.fetchStats()
+                }
                 break
             }
           } catch (error) {
@@ -336,12 +440,34 @@ export const useTruckStore = defineStore('trucks', {
     debugState() {
       console.log('🔍 Current store state:', {
         trucksCount: this.trucks.length,
+        validTrucks: this.trucks.filter(t => this.validateTruck(t)).length,
+        invalidTrucks: this.trucks.filter(t => !this.validateTruck(t)).length,
         loading: this.loading,
         error: this.error,
         dateFilter: this.dateFilter,
         stats: this.stats,
-        websocketState: this.websocket?.readyState
+        websocketState: this.websocket?.readyState,
+        sampleTruckIds: this.trucks.slice(0, 5).map(t => ({ id: t.id, shipping_no: t.shipping_no }))
       })
+      
+      // Check for invalid trucks
+      const invalidTrucks = this.trucks.filter(t => !this.validateTruck(t))
+      if (invalidTrucks.length > 0) {
+        console.warn('⚠️ Found invalid trucks:', invalidTrucks)
+      }
+    },
+
+    // Clean up invalid trucks from state
+    cleanupTrucks() {
+      const originalCount = this.trucks.length
+      this.trucks = this.trucks.filter(truck => this.validateTruck(truck))
+      const cleanedCount = this.trucks.length
+      
+      if (originalCount !== cleanedCount) {
+        console.log(`🧹 Cleaned up ${originalCount - cleanedCount} invalid trucks`)
+      }
+      
+      return cleanedCount
     }
   }
 })
