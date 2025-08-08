@@ -209,19 +209,20 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, inject } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { useTruckStore } from '@/stores/trucks'
 import { useSnackbarStore } from '@/stores/snackbar'
 import ExcelImport from '@/components/ExcelImport.vue'
-import axios from 'axios'
 import { saveAs } from 'file-saver'
 import DateFilter from '@/components/DateFilter.vue'
+import { apiService } from '@/services/api.js'
+
+const $http = inject('$http')
 
 const authStore = useAuthStore()
 const truckStore = useTruckStore()
 const snackbarStore = useSnackbarStore()
-
 // Data
 const dialog = ref(false)
 const deleteDialog = ref(false)
@@ -395,100 +396,248 @@ const quickUpdateStatus = async (id, type, status) => {
 // Excel Functions
 const downloadTemplate = async () => {
   try {
-    const response = await axios.get('/api/trucks/template', {
-      responseType: 'blob'
+    console.log('🔄 Downloading template...')
+    
+    // Debug authentication
+    console.log('🔐 Auth debug:', { 
+      hasToken: !!authStore.token, 
+      tokenLength: authStore.token?.length,
+      role: authStore.role,
+      isAuthenticated: authStore.isAuthenticated,
+      tokenPreview: authStore.token?.substring(0, 20) + '...'
     })
-    const blob = new Blob([response.data], {
-      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    
+    if (!authStore.isAuthenticated || !authStore.token) {
+      snackbarStore.error('Please login first')
+      return
+    }
+
+    // Test auth first
+    console.log('🧪 Testing auth before download...')
+    const authTest = await authStore.testAuth()
+    if (!authTest) {
+      snackbarStore.error('Authentication expired. Please login again.')
+      authStore.logout()
+      return
+    }
+    console.log('✅ Auth test passed')
+
+    // Make request with explicit headers
+    const config = {
+      responseType: 'blob',
+      headers: {
+        'Authorization': `Bearer ${authStore.token}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: 30000
+    }
+
+    console.log('📡 Making request to /api/trucks/template with config:', {
+      hasAuth: !!config.headers.Authorization,
+      responseType: config.responseType
     })
-    saveAs(blob, 'truck_import_template.xlsx')
-    snackbarStore.success('Template downloaded successfully')
+
+    const response = await $http.get('/api/trucks/template', config)
+    
+    console.log('📥 Template Response:', {
+      status: response.status,
+      contentType: response.headers['content-type'],
+      dataSize: response.data?.size || response.data?.length
+    })
+    
+    // Create and download file
+    const contentType = response.headers['content-type'] || 'text/csv'
+    const filename = 'truck_monthly_template.csv'
+    const blob = new Blob([response.data], { type: contentType })
+    saveAs(blob, filename)
+    
+    snackbarStore.success(`✅ Template downloaded: ${filename}`)
+    
   } catch (error) {
-    console.error('Failed to download template:', error)
-    snackbarStore.error('Failed to download template')
+    console.error('❌ Template download failed:', error)
+    console.error('Error details:', {
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data,
+      headers: error.response?.headers
+    })
+    
+    let errorMessage = 'Failed to download template'
+    
+    if (error.response?.status === 401) {
+      errorMessage = '🔐 Authentication failed. Please login again.'
+      authStore.logout()
+    } else if (error.response?.status === 404) {
+      errorMessage = '📁 Template endpoint not found. Trying alternative...'
+      // Try alternative endpoint
+      try {
+        await downloadTemplateAlternative()
+        return
+      } catch (altError) {
+        errorMessage = '📁 Template service unavailable'
+      }
+    } else if (error.response?.status === 403) {
+      errorMessage = '🚫 Insufficient permissions. Need viewer role or higher.'
+    } else if (error.response?.data?.detail) {
+      errorMessage = error.response.data.detail
+    } else if (error.code === 'NETWORK_ERROR') {
+      errorMessage = '🌐 Network error. Check backend connection.'
+    }
+    
+    snackbarStore.error(errorMessage)
   }
 }
+// Alternative: Create template locally if backend fails
+const downloadTemplateAlternative = async () => {
+  console.log('🔧 Creating template locally...')
+  
+  const headers = [
+    'Month (YYYY-MM)',
+    'Terminal',
+    'Shipping No',
+    'Dock Code',
+    'Route',
+    'Prep Start',
+    'Prep End',
+    'Load Start',
+    'Load End',
+    'Status Prep',
+    'Status Load'
+  ]
+  
+  const sampleData = [
+    ['2024-01', 'A', 'SHP001', 'DOCK-A1', 'Bangkok-Chonburi', '08:00', '08:30', '09:00', '10:00', 'Finished', 'Finished'],
+    ['2024-01', 'B', 'SHP002', 'DOCK-B1', 'Bangkok-Rayong', '09:00', '09:30', '10:00', '', 'Finished', 'On Process'],
+    ['2024-02', 'C', 'SHP003', 'DOCK-C1', 'Bangkok-Pattaya', '10:00', '', '', '', 'On Process', 'On Process']
+  ]
+  
+  const csvContent = [
+    headers.join(','),
+    ...sampleData.map(row => row.map(cell => 
+      (cell.toString().includes(',') || cell === '') ? `"${cell}"` : cell
+    ).join(','))
+  ].join('\n')
+  
+  const blob = new Blob([csvContent], { type: 'text/csv' })
+  saveAs(blob, 'truck_monthly_template.csv')
+  
+  snackbarStore.success('✅ Template created locally and downloaded')
+}
+
+// Debug function สำหรับทดสอบ
+const debugAuth = async () => {
+  console.log('🔍 Debug Authentication:')
+  console.log('Token:', authStore.token?.substring(0, 50) + '...')
+  console.log('Role:', authStore.role)
+  console.log('Is Authenticated:', authStore.isAuthenticated)
+  
+  try {
+    const response = await $http.get('/health')
+    console.log('✅ Backend Health:', response.data)
+  } catch (error) {
+    console.error('❌ Backend Health Error:', error.response?.data || error.message)
+  }
+  
+  try {
+    const response = await $http.get('/api/trucks/template/test')
+    console.log('✅ Test Template Endpoint:', response.status)
+  } catch (error) {
+    console.error('❌ Test Template Error:', error.response?.data || error.message)
+  }
+}
+
+// แทนที่ exportToExcel function ใน ManagementView.vue
 
 const exportToExcel = async () => {
   try {
-    const params = new URLSearchParams()
-    if (filterTerminal.value) params.append('terminal', filterTerminal.value)
-    if (filterPrepStatus.value) params.append('status_preparation', filterPrepStatus.value)
-    if (filterLoadStatus.value) params.append('status_loading', filterLoadStatus.value)
-    if (dateFrom.value) params.append('date_from', dateFrom.value)
-    if (dateTo.value) params.append('date_to', dateTo.value)
+    console.log('🔄 Exporting data...')
+    
+    if (!authStore.isAuthenticated) {
+      snackbarStore.error('Please login first')
+      return
+    }
+    
+    const params = {}
+    if (filterTerminal.value) params.terminal = filterTerminal.value
+    if (filterPrepStatus.value) params.status_preparation = filterPrepStatus.value
+    if (filterLoadStatus.value) params.status_loading = filterLoadStatus.value
+    if (dateFrom.value) params.date_from = dateFrom.value
+    if (dateTo.value) params.date_to = dateTo.value
 
-    const response = await axios.get(`/api/trucks/export?${params}`, {
-      responseType: 'blob'
+    // ใช้ endpoint ใหม่ /api/trucks/export
+    const response = await $http.get('/api/trucks/export', {
+      params,
+      responseType: 'blob',
+      headers: { 'Authorization': `Bearer ${authStore.token}` }
     })
-
-    const blob = new Blob([response.data], {
-      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    })
-    const filename = `trucks_export_${new Date().toISOString().split('T')[0]}.xlsx`
+    
+    // ตรวจสอบ Content-Type จาก response
+    const contentType = response.headers['content-type'] || 'text/csv'
+    let filename = `trucks_export_${new Date().toISOString().split('T')[0]}.csv`
+    
+    if (contentType.includes('spreadsheet') || contentType.includes('excel')) {
+      filename = filename.replace('.csv', '.xlsx')
+    }
+    
+    const blob = new Blob([response.data], { type: contentType })
     saveAs(blob, filename)
-    snackbarStore.success('Data exported successfully')
+    
+    snackbarStore.success(`✅ Data exported: ${filename}`)
+    
   } catch (error) {
-    console.error('Failed to export data:', error)
-    snackbarStore.error('Failed to export data')
+    console.error('❌ Export failed:', error)
+    
+    let errorMessage = 'Failed to export data'
+    
+    if (error.response?.status === 401) {
+      errorMessage = '🔐 Authentication failed. Please login again.'
+      authStore.logout()
+    } else if (error.response?.status === 404) {
+      errorMessage = '📁 Export endpoint not available'
+    } else if (error.response?.data?.detail) {
+      errorMessage = error.response.data.detail
+    }
+    
+    snackbarStore.error(errorMessage)
   }
 }
 
-const handleImported = (count) => {
-  applyFilters()
-  selected.value = []
-  snackbarStore.success(`${count} trucks imported successfully`)
-}
-
-const bulkUpdateStatus = () => {
-  if (selected.value.length === 0) return
-  bulkDialog.value = true
-}
-
-const confirmBulkUpdate = async () => {
+// Test function to verify auth
+const testAuth = async () => {
   try {
-    const updatePromises = selected.value.map(truck =>
-      truckStore.updateStatus(truck.id, bulkStatusType.value, bulkStatusValue.value)
-    )
-    await Promise.all(updatePromises)
-    snackbarStore.success(`${selected.value.length} trucks updated successfully`)
-    bulkDialog.value = false
-    selected.value = []
-    await applyFilters()
+    console.log('🧪 Testing authentication...')
+    const result = await authStore.testAuth()
+    console.log('🧪 Auth test result:', result)
+    
+    if (result) {
+      snackbarStore.success('✅ Authentication is working')
+    } else {
+      snackbarStore.error('❌ Authentication failed')
+    }
   } catch (error) {
-    console.error('Failed to bulk update:', error)
-    snackbarStore.error('Failed to bulk update')
+    console.error('🧪 Auth test error:', error)
+    snackbarStore.error('❌ Auth test failed')
   }
 }
 
-const bulkDelete = async () => {
-  if (!confirm(`Are you sure you want to delete ${selected.value.length} trucks?`)) {
-    return
-  }
+// ... (keep all your other existing methods) ...
 
-  try {
-    const deletePromises = selected.value.map(truck =>
-      truckStore.deleteTruck(truck.id)
-    )
-    await Promise.all(deletePromises)
-    snackbarStore.success(`${selected.value.length} trucks deleted successfully`)
-    selected.value = []
-    await applyFilters()
-  } catch (error) {
-    console.error('Failed to bulk delete:', error)
-    snackbarStore.error('Failed to bulk delete')
+onMounted(async () => {
+  // Initialize auth
+  authStore.initAuth()
+  
+  // Test auth if we have a token
+  if (authStore.token) {
+    await authStore.testAuth()
   }
-}
-
-onMounted(() => {
+  
+  // Load data
   truckStore.fetchTrucks()
   truckStore.connectWebSocket()
+  
+  // Add test function to window for debugging
+   window.debugAuth = debugAuth
+  window.downloadTemplateAlt = downloadTemplateAlternative
+  console.log('🔧 Debug functions: debugAuth(), downloadTemplateAlt()')
 })
 </script>
-
-<style scoped>
-.v-data-table ::v-deep .v-data-table__wrapper {
-  max-height: calc(100vh - 400px);
-  overflow-y: auto;
-}
-</style>

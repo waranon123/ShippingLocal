@@ -1,22 +1,19 @@
+// frontend/src/main.js
 import { createApp } from 'vue'
+import { createPinia } from 'pinia'
 import App from './App.vue'
 import router from './router'
-import { createPinia } from 'pinia'
 import vuetify from './plugins/vuetify'
+import api from './plugins/axios' // Import configured axios
 
-// Import Material Design Icons
-import '@mdi/font/css/materialdesignicons.css'
-
-// Create Pinia store
-const pinia = createPinia()
-
-// Create Vue app
 const app = createApp(App)
 
-// Use plugins
-app.use(pinia)
+// Make axios available globally
+app.config.globalProperties.$http = api
+app.provide('$http', api)
+
+app.use(createPinia())
 app.use(router)
 app.use(vuetify)
 
-// Mount app
 app.mount('#app')

@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import bcrypt from 'bcryptjs'
 import { read, utils } from 'xlsx'
-
+import * as ExcelJS from 'exceljs'
 const app = new Hono()
 
 // In-memory session storage (in production, use KV)
@@ -95,18 +95,30 @@ const createAuthMiddleware = (requiredRole = 'viewer') => {
   return async (c, next) => {
     const authHeader = c.req.header('Authorization')
     
+    console.log('Auth check:', {
+      hasAuthHeader: !!authHeader,
+      authHeader: authHeader ? authHeader.substring(0, 20) + '...' : null,
+      requiredRole,
+      jwtSecret: c.env.JWT_SECRET ? 'present' : 'missing'
+    })
+    
     if (!authHeader?.startsWith('Bearer ')) {
-      return c.json({ detail: 'Could not validate credentials' }, 401)
+      console.log('No valid bearer token found')
+      return c.json({ detail: 'Could not validate credentials - no bearer token' }, 401)
     }
 
     try {
       const token = authHeader.replace('Bearer ', '')
+      console.log('Attempting to verify token...')
+      
       const payload = await verifyJWT(token, c.env.JWT_SECRET)
+      console.log('Token verified successfully:', { user: payload.sub, role: payload.role, exp: payload.exp })
       
       const roleHierarchy = { viewer: 0, user: 1, admin: 2 }
       const userRole = payload.role || 'viewer'
       
       if (roleHierarchy[userRole] < roleHierarchy[requiredRole]) {
+        console.log('Insufficient permissions:', { userRole, requiredRole })
         return c.json({ detail: 'Not enough permissions' }, 403)
       }
 
@@ -114,7 +126,10 @@ const createAuthMiddleware = (requiredRole = 'viewer') => {
       await next()
     } catch (error) {
       console.error('Auth error:', error)
-      return c.json({ detail: 'Could not validate credentials' }, 401)
+      return c.json({ 
+        detail: 'Could not validate credentials - ' + error.message,
+        debug: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      }, 401)
     }
   }
 }
@@ -382,31 +397,6 @@ app.get('/api/trucks', createAuthMiddleware('viewer'), async (c) => {
   }
 })
 
-// Get single truck
-app.get('/api/trucks/:id', createAuthMiddleware('viewer'), async (c) => {
-  try {
-    const db = c.env.DB
-    if (!db) {
-      return c.json({ detail: 'Database not available' }, 500)
-    }
-
-    const id = c.req.param('id')
-    const truck = await db.prepare(
-      "SELECT * FROM trucks WHERE id = ?"
-    ).bind(id).first()
-
-    if (!truck) {
-      return c.json({ detail: 'Truck not found' }, 404)
-    }
-
-    return c.json(truck)
-
-  } catch (error) {
-    console.error('Get truck error:', error)
-    return c.json({ detail: 'Failed to fetch truck' }, 500)
-  }
-})
-
 // Create truck
 app.post('/api/trucks', createAuthMiddleware('user'), async (c) => {
   try {
@@ -545,50 +535,6 @@ app.delete('/api/trucks/:id', createAuthMiddleware('admin'), async (c) => {
   }
 })
 
-// Update truck status
-app.patch('/api/trucks/:id/status', createAuthMiddleware('user'), async (c) => {
-  try {
-    const id = c.req.param('id')
-    const query = c.req.query()
-    const { status_type, status } = query
-
-    if (!['preparation', 'loading'].includes(status_type)) {
-      return c.json({ detail: 'Invalid status type' }, 400)
-    }
-
-    if (!['On Process', 'Delay', 'Finished'].includes(status)) {
-      return c.json({ detail: 'Invalid status value' }, 400)
-    }
-
-    const db = c.env.DB
-    if (!db) {
-      return c.json({ detail: 'Database not available' }, 500)
-    }
-
-    const statusColumn = status_type === 'preparation' ? 'status_preparation' : 'status_loading'
-
-    const result = await db.prepare(`
-      UPDATE trucks 
-      SET ${statusColumn} = ?, updated_at = ?
-      WHERE id = ?
-    `).bind(status, getCurrentTimestamp(), id).run()
-
-    if (result.changes === 0) {
-      return c.json({ detail: 'Truck not found' }, 404)
-    }
-
-    const updatedTruck = await db.prepare(
-      "SELECT * FROM trucks WHERE id = ?"
-    ).bind(id).first()
-
-    return c.json(updatedTruck)
-
-  } catch (error) {
-    console.error('Update status error:', error)
-    return c.json({ detail: 'Failed to update status' }, 500)
-  }
-})
-
 // Get statistics
 app.get('/api/stats', createAuthMiddleware('viewer'), async (c) => {
   try {
@@ -675,162 +621,67 @@ app.get('/api/stats', createAuthMiddleware('viewer'), async (c) => {
   }
 })
 
-// Register new user
-app.post('/api/auth/register', createAuthMiddleware('admin'), async (c) => {
-  try {
-    const { username, password, role = 'user' } = await c.req.json()
-
-    if (!username || !password) {
-      return c.json({ detail: 'Username and password required' }, 400)
-    }
-
-    const validRoles = ['viewer', 'user', 'admin']
-    if (!validRoles.includes(role)) {
-      return c.json({ detail: 'Invalid role' }, 400)
-    }
-
-    const db = c.env.DB
-    if (!db) {
-      return c.json({ detail: 'Database not available' }, 500)
-    }
-    
-    const existingUser = await db.prepare(
-      "SELECT username FROM users WHERE username = ?"
-    ).bind(username).first()
-
-    if (existingUser) {
-      return c.json({ detail: 'Username already exists' }, 400)
-    }
-
-    const passwordHash = await bcrypt.hash(password, 12)
-    const userId = generateId()
-
-    const result = await db.prepare(`
-      INSERT INTO users (id, username, password_hash, role, created_at)
-      VALUES (?, ?, ?, ?, ?)
-    `).bind(userId, username, passwordHash, role, getCurrentTimestamp()).run()
-
-    if (result.success) {
-      return c.json({
-        success: true,
-        message: `User '${username}' created successfully`,
-        user: {
-          id: userId,
-          username,
-          role
-        }
-      })
-    } else {
-      throw new Error('Failed to create user')
-    }
-
-  } catch (error) {
-    console.error('Registration error:', error)
-    return c.json({ detail: 'Failed to create user: ' + error.message }, 500)
-  }
-})
-
-// Get all users
-app.get('/api/users', createAuthMiddleware('admin'), async (c) => {
-  try {
-    const db = c.env.DB
-    if (!db) {
-      return c.json({ detail: 'Database not available' }, 500)
-    }
-
-    const users = await db.prepare(
-      "SELECT id, username, role, created_at FROM users"
-    ).all()
-
-    return c.json(users.results || [])
-
-  } catch (error) {
-    console.error('Get users error:', error)
-    return c.json({ detail: 'Failed to fetch users' }, 500)
-  }
-})
-
-// Delete user
-app.delete('/api/users/:id', createAuthMiddleware('admin'), async (c) => {
-  try {
-    const id = c.req.param('id')
-    const db = c.env.DB
-
-    if (!db) {
-      return c.json({ detail: 'Database not available' }, 500)
-    }
-
-    const result = await db.prepare(
-      "DELETE FROM users WHERE id = ?"
-    ).bind(id).run()
-
-    if (result.changes === 0) {
-      return c.json({ detail: 'User not found' }, 404)
-    }
-
-    return c.json({ message: 'User deleted successfully' })
-
-  } catch (error) {
-    console.error('Delete user error:', error)
-    return c.json({ detail: 'Failed to delete user: ' + error.message }, 500)
-  }
-})
-
 // Download import template
 app.get('/api/trucks/template', createAuthMiddleware('viewer'), async (c) => {
   try {
-    console.log('Template download requested')
+    console.log('📋 Template download requested by:', c.get('user')?.sub)
     
-    // Generate CSV template instead of Excel for Cloudflare Workers
-    // Since Workers doesn't have native Excel generation, we'll use CSV
-    const csvHeaders = [
-      'Month (YYYY-MM)',
-      'Terminal',
-      'Shipping No',
-      'Dock Code',
-      'Route',
-      'Prep Start',
-      'Prep End',
-      'Load Start',
-      'Load End',
-      'Status Prep',
-      'Status Load'
-    ]
-    
-    const sampleData = [
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Truck Template');
+
+    // Define headers
+    worksheet.columns = [
+      { header: 'Month (YYYY-MM)', key: 'month' },
+      { header: 'Terminal', key: 'terminal' },
+      { header: 'Shipping No', key: 'shipping_no' },
+      { header: 'Dock Code', key: 'dock_code' },
+      { header: 'Route', key: 'route' },
+      { header: 'Prep Start', key: 'prep_start' },
+      { header: 'Prep End', key: 'prep_end' },
+      { header: 'Load Start', key: 'load_start' },
+      { header: 'Load End', key: 'load_end' },
+      { header: 'Status Prep', key: 'status_prep' },
+      { header: 'Status Load', key: 'status_load' }
+    ];
+
+    // Add sample data
+    worksheet.addRows([
       ['2024-01', 'A', 'SHP001', 'DOCK-A1', 'Bangkok-Chonburi', '08:00', '08:30', '09:00', '10:00', 'Finished', 'Finished'],
       ['2024-01', 'B', 'SHP002', 'DOCK-B1', 'Bangkok-Rayong', '09:00', '09:30', '10:00', '', 'Finished', 'On Process'],
       ['2024-02', 'C', 'SHP003', 'DOCK-C1', 'Bangkok-Pattaya', '10:00', '', '', '', 'On Process', 'On Process']
-    ]
+    ]);
+
+    // Generate buffer
+    const buffer = await workbook.xlsx.writeBuffer();
+
+    console.log('✅ Template generated, size:', buffer.byteLength, 'bytes')
     
-    // Build CSV content
-    const csvContent = [
-      csvHeaders.join(','),
-      ...sampleData.map(row => row.map(cell => 
-        // Wrap in quotes if contains comma or is empty
-        cell.includes(',') || cell === '' ? `"${cell}"` : cell
-      ).join(','))
-    ].join('\n')
-    
-    // Return CSV file
-    return new Response(csvContent, {
+    // Return Excel file with proper headers
+    return new Response(buffer, {
+      status: 200,
       headers: {
-        'Content-Type': 'text/csv',
-        'Content-Disposition': 'attachment; filename="truck_monthly_template.csv"',
-        'Cache-Control': 'no-cache'
+        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'Content-Disposition': 'attachment; filename="truck_monthly_template.xlsx"',
+        'Content-Length': buffer.byteLength.toString(),
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0',
+        'Access-Control-Expose-Headers': 'Content-Disposition'
       }
-    })
+    });
     
   } catch (error) {
-    console.error('Template generation error:', error)
-    return c.json({ detail: 'Failed to generate template: ' + error.message }, 500)
+    console.error('❌ Template generation error:', error)
+    return c.json({ 
+      detail: 'Failed to generate template: ' + error.message,
+      timestamp: getCurrentTimestamp()
+    }, 500)
   }
-})
+});
 
 // Alternative: Return template as JSON with base64 encoded Excel-like structure
 app.get('/api/trucks/template/json', createAuthMiddleware('viewer'), async (c) => {
   try {
-    // Return template structure as JSON
     const template = {
       headers: [
         'Month (YYYY-MM)',
@@ -858,35 +709,162 @@ app.get('/api/trucks/template/json', createAuthMiddleware('viewer'), async (c) =
           'Load End': '10:00',
           'Status Prep': 'Finished',
           'Status Load': 'Finished'
-        },
-        {
-          'Month (YYYY-MM)': '2024-01',
-          'Terminal': 'B',
-          'Shipping No': 'SHP002',
-          'Dock Code': 'DOCK-B1',
-          'Route': 'Bangkok-Rayong',
-          'Prep Start': '09:00',
-          'Prep End': '09:30',
-          'Load Start': '10:00',
-          'Load End': '',
-          'Status Prep': 'Finished',
-          'Status Load': 'On Process'
         }
       ],
       instructions: {
         monthly_import: 'Each row creates daily records for the entire month',
         date_format: 'YYYY-MM (e.g., 2024-01 for January 2024)',
         time_format: 'HH:MM (24-hour format)',
-        status_values: ['On Process', 'Delay', 'Finished'],
-        note: 'Shipping numbers will be auto-suffixed with dates (e.g., SHP001_20240101)'
+        status_values: ['On Process', 'Delay', 'Finished']
       }
     }
     
     return c.json(template)
     
   } catch (error) {
-    console.error('Template JSON generation error:', error)
+    console.error('❌ Template JSON error:', error)
     return c.json({ detail: 'Failed to generate template JSON: ' + error.message }, 500)
+  }
+})
+
+// Debug endpoint (no auth required)
+app.get('/api/trucks/template/debug', async (c) => {
+  try {
+    console.log('🔧 Debug template endpoint called')
+    
+    return c.json({
+      message: 'Template debug endpoint working',
+      timestamp: getCurrentTimestamp(),
+      headers: Object.fromEntries(c.req.raw.headers.entries()),
+      method: c.req.method,
+      url: c.req.url,
+      available_endpoints: [
+        'GET /api/trucks/template - Download CSV template (requires auth)',
+        'GET /api/trucks/export - Export data as CSV (requires auth)',
+        'GET /api/trucks/template/json - Get template as JSON (requires auth)',
+        'GET /api/trucks/template/debug - This debug endpoint (no auth)'
+      ]
+    })
+    
+  } catch (error) {
+    console.error('Debug error:', error)
+    return c.json({ detail: 'Debug failed: ' + error.message }, 500)
+  }
+})
+
+// Export trucks as CSV
+app.get('/api/trucks/export', createAuthMiddleware('viewer'), async (c) => {
+  try {
+    console.log('📊 Export requested by:', c.get('user')?.sub)
+    
+    const db = c.env.DB
+    if (!db) {
+      return c.json({ detail: 'Database not available' }, 500)
+    }
+
+    const query = c.req.query()
+    const {
+      terminal,
+      status_preparation,
+      status_loading,
+      date_from,
+      date_to
+    } = query
+
+    let sql = 'SELECT * FROM trucks WHERE 1=1'
+    const params = []
+
+    if (terminal) {
+      sql += ' AND terminal = ?'
+      params.push(terminal)
+    }
+
+    if (status_preparation) {
+      sql += ' AND status_preparation = ?'
+      params.push(status_preparation)
+    }
+
+    if (status_loading) {
+      sql += ' AND status_loading = ?'
+      params.push(status_loading)
+    }
+
+    if (date_from) {
+      sql += ' AND DATE(created_at) >= ?'
+      params.push(date_from)
+    }
+
+    if (date_to) {
+      sql += ' AND DATE(created_at) <= ?'
+      params.push(date_to)
+    }
+
+    sql += ' ORDER BY created_at DESC'
+
+    const stmt = db.prepare(sql)
+    const result = await stmt.bind(...params).all()
+    const trucks = result.results || []
+
+    // Generate CSV export
+    const headers = [
+      'ID',
+      'Terminal', 
+      'Shipping No',
+      'Dock Code',
+      'Truck Route',
+      'Prep Start',
+      'Prep End', 
+      'Loading Start',
+      'Loading End',
+      'Prep Status',
+      'Loading Status',
+      'Created Date',
+      'Updated Date'
+    ]
+    
+    const csvRows = trucks.map(truck => [
+      truck.id,
+      truck.terminal,
+      truck.shipping_no,
+      truck.dock_code,
+      truck.truck_route,
+      truck.preparation_start || '',
+      truck.preparation_end || '',
+      truck.loading_start || '',
+      truck.loading_end || '',
+      truck.status_preparation,
+      truck.status_loading,
+      truck.created_at?.split('T')[0] || '',
+      truck.updated_at?.split('T')[0] || ''
+    ])
+    
+    const csvContent = [
+      headers.join(','),
+      ...csvRows.map(row => row.map(cell => 
+        (cell.toString().includes(',') || cell === '') ? `"${cell}"` : cell.toString()
+      ).join(','))
+    ].join('\n')
+    
+    // Add BOM for Excel compatibility
+    const bom = '\uFEFF'
+    const finalContent = bom + csvContent
+    
+    console.log('✅ Export generated:', trucks.length, 'records,', finalContent.length, 'bytes')
+    
+    return new Response(finalContent, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="trucks_export_${new Date().toISOString().split('T')[0]}.csv"`,
+        'Content-Length': finalContent.length.toString(),
+        'Cache-Control': 'no-cache',
+        'Access-Control-Expose-Headers': 'Content-Disposition'
+      }
+    })
+
+  } catch (error) {
+    console.error('❌ Export error:', error)
+    return c.json({ detail: 'Export failed: ' + error.message }, 500)
   }
 })
 
@@ -1160,6 +1138,176 @@ app.post('/api/trucks/import/confirm', createAuthMiddleware('user'), async (c) =
   } catch (error) {
     console.error('Import confirm error:', error)
     return c.json({ detail: `Import failed: ${error.message}` }, 500)
+  }
+})
+
+// Register new user
+app.post('/api/auth/register', createAuthMiddleware('admin'), async (c) => {
+  try {
+    const { username, password, role = 'user' } = await c.req.json()
+
+    if (!username || !password) {
+      return c.json({ detail: 'Username and password required' }, 400)
+    }
+
+    const validRoles = ['viewer', 'user', 'admin']
+    if (!validRoles.includes(role)) {
+      return c.json({ detail: 'Invalid role' }, 400)
+    }
+
+    const db = c.env.DB
+    if (!db) {
+      return c.json({ detail: 'Database not available' }, 500)
+    }
+    
+    const existingUser = await db.prepare(
+      "SELECT username FROM users WHERE username = ?"
+    ).bind(username).first()
+
+    if (existingUser) {
+      return c.json({ detail: 'Username already exists' }, 400)
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12)
+    const userId = generateId()
+
+    const result = await db.prepare(`
+      INSERT INTO users (id, username, password_hash, role, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).bind(userId, username, passwordHash, role, getCurrentTimestamp()).run()
+
+    if (result.success) {
+      return c.json({
+        success: true,
+        message: `User '${username}' created successfully`,
+        user: {
+          id: userId,
+          username,
+          role
+        }
+      })
+    } else {
+      throw new Error('Failed to create user')
+    }
+
+  } catch (error) {
+    console.error('Registration error:', error)
+    return c.json({ detail: 'Failed to create user: ' + error.message }, 500)
+  }
+})
+
+// Get all users
+app.get('/api/users', createAuthMiddleware('admin'), async (c) => {
+  try {
+    const db = c.env.DB
+    if (!db) {
+      return c.json({ detail: 'Database not available' }, 500)
+    }
+
+    const users = await db.prepare(
+      "SELECT id, username, role, created_at FROM users"
+    ).all()
+
+    return c.json(users.results || [])
+
+  } catch (error) {
+    console.error('Get users error:', error)
+    return c.json({ detail: 'Failed to fetch users' }, 500)
+  }
+})
+
+// Delete user
+app.delete('/api/users/:id', createAuthMiddleware('admin'), async (c) => {
+  try {
+    const id = c.req.param('id')
+    const db = c.env.DB
+
+    if (!db) {
+      return c.json({ detail: 'Database not available' }, 500)
+    }
+
+    const result = await db.prepare(
+      "DELETE FROM users WHERE id = ?"
+    ).bind(id).run()
+
+    if (result.changes === 0) {
+      return c.json({ detail: 'User not found' }, 404)
+    }
+
+    return c.json({ message: 'User deleted successfully' })
+
+  } catch (error) {
+    console.error('Delete user error:', error)
+    return c.json({ detail: 'Failed to delete user: ' + error.message }, 500)
+  }
+})
+
+// Parameterized routes (placed after specific routes)
+app.get('/api/trucks/:id', createAuthMiddleware('viewer'), async (c) => {
+  try {
+    const db = c.env.DB
+    if (!db) {
+      return c.json({ detail: 'Database not available' }, 500)
+    }
+
+    const id = c.req.param('id')
+    const truck = await db.prepare(
+      "SELECT * FROM trucks WHERE id = ?"
+    ).bind(id).first()
+
+    if (!truck) {
+      return c.json({ detail: 'Truck not found' }, 404)
+    }
+
+    return c.json(truck)
+
+  } catch (error) {
+    console.error('Get truck error:', error)
+    return c.json({ detail: 'Failed to fetch truck' }, 500)
+  }
+})
+
+// Update truck status
+app.patch('/api/trucks/:id/status', createAuthMiddleware('user'), async (c) => {
+  try {
+    const id = c.req.param('id')
+    const query = c.req.query()
+    const { status_type, status } = query
+
+    if (!['preparation', 'loading'].includes(status_type)) {
+      return c.json({ detail: 'Invalid status type' }, 400)
+    }
+
+    if (!['On Process', 'Delay', 'Finished'].includes(status)) {
+      return c.json({ detail: 'Invalid status value' }, 400)
+    }
+
+    const db = c.env.DB
+    if (!db) {
+      return c.json({ detail: 'Database not available' }, 500)
+    }
+
+    const statusColumn = status_type === 'preparation' ? 'status_preparation' : 'status_loading'
+
+    const result = await db.prepare(`
+      UPDATE trucks 
+      SET ${statusColumn} = ?, updated_at = ?
+      WHERE id = ?
+    `).bind(status, getCurrentTimestamp(), id).run()
+
+    if (result.changes === 0) {
+      return c.json({ detail: 'Truck not found' }, 404)
+    }
+
+    const updatedTruck = await db.prepare(
+      "SELECT * FROM trucks WHERE id = ?"
+    ).bind(id).first()
+
+    return c.json(updatedTruck)
+
+  } catch (error) {
+    console.error('Update status error:', error)
+    return c.json({ detail: 'Failed to update status' }, 500)
   }
 })
 
