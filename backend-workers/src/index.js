@@ -398,62 +398,75 @@ app.get('/api/trucks', createAuthMiddleware('viewer'), async (c) => {
 })
 
 // Create truck
-app.post('/api/trucks', createAuthMiddleware('user'), async (c) => {
+app.get('/api/trucks', createAuthMiddleware('viewer'), async (c) => {
   try {
-    const truckData = await c.req.json()
     const db = c.env.DB
-
     if (!db) {
       return c.json({ detail: 'Database not available' }, 500)
     }
 
-    const requiredFields = ['terminal', 'shipping_no', 'dock_code', 'truck_route']
-    for (const field of requiredFields) {
-      if (!truckData[field]) {
-        return c.json({ detail: `${field} is required` }, 400)
-      }
+    const query = c.req.query()
+    const {
+      skip = '0',
+      limit = '100',
+      terminal,
+      status_preparation,
+      status_loading,
+      date_from,
+      date_to
+    } = query
+
+    let sql = 'SELECT id, terminal, shipping_no, dock_code, truck_route, preparation_start, preparation_end, loading_start, loading_end, status_preparation, status_loading, created_at, updated_at FROM trucks WHERE 1=1'
+    const params = []
+
+    if (terminal) {
+      sql += ' AND terminal = ?'
+      params.push(terminal)
     }
 
-    const id = generateId()
-    const now = getCurrentTimestamp()
-
-    const result = await db.prepare(`
-      INSERT INTO trucks (
-        id, terminal, shipping_no, dock_code, truck_route,
-        preparation_start, preparation_end, loading_start, loading_end,
-        status_preparation, status_loading, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(
-      id,
-      truckData.terminal,
-      truckData.shipping_no,
-      truckData.dock_code,
-      truckData.truck_route,
-      truckData.preparation_start || null,
-      truckData.preparation_end || null,
-      truckData.loading_start || null,
-      truckData.loading_end || null,
-      truckData.status_preparation || 'On Process',
-      truckData.status_loading || 'On Process',
-      now,
-      now
-    ).run()
-
-    if (result.success) {
-      const newTruck = await db.prepare(
-        "SELECT * FROM trucks WHERE id = ?"
-      ).bind(id).first()
-      
-      return c.json(newTruck, 201)
-    } else {
-      throw new Error('Failed to create truck')
+    if (status_preparation) {
+      sql += ' AND status_preparation = ?'
+      params.push(status_preparation)
     }
+
+    if (status_loading) {
+      sql += ' AND status_loading = ?'
+      params.push(status_loading)
+    }
+
+    if (date_from) {
+      sql += ' AND DATE(created_at) >= ?'
+      params.push(date_from)
+    }
+
+    if (date_to) {
+      sql += ' AND DATE(created_at) <= ?'
+      params.push(date_to)
+    }
+
+    sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?'
+    params.push(parseInt(limit), parseInt(skip))
+
+    const stmt = db.prepare(sql)
+    const result = await stmt.bind(...params).all()
+
+    // Format time fields if they exist
+    const formattedResults = result.results.map(truck => ({
+      ...truck,
+      preparation_start: truck.preparation_start || '',
+      preparation_end: truck.preparation_end || '',
+      loading_start: truck.loading_start || '',
+      loading_end: truck.loading_end || ''
+    }));
+
+    return c.json(formattedResults || [])
 
   } catch (error) {
-    console.error('Create truck error:', error)
-    return c.json({ detail: 'Failed to create truck: ' + error.message }, 500)
+    console.error('Get trucks error:', error)
+    return c.json({ detail: 'Failed to fetch trucks: ' + error.message }, 500)
   }
 })
+
 
 // Update truck
 app.put('/api/trucks/:id', createAuthMiddleware('user'), async (c) => {
@@ -627,11 +640,11 @@ app.get('/api/trucks/template', createAuthMiddleware('viewer'), async (c) => {
     console.log('📋 Template download requested by:', c.get('user')?.sub)
     
     const workbook = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet('Truck Template');
+    const worksheet = workbook.addWorksheet('Template');
 
-    // Define headers
+    // Define headers to match Python code
     worksheet.columns = [
-      { header: 'Month (YYYY-MM)', key: 'month' },
+      { header: 'Month', key: 'month' },
       { header: 'Terminal', key: 'terminal' },
       { header: 'Shipping No', key: 'shipping_no' },
       { header: 'Dock Code', key: 'dock_code' },
@@ -644,24 +657,71 @@ app.get('/api/trucks/template', createAuthMiddleware('viewer'), async (c) => {
       { header: 'Status Load', key: 'status_load' }
     ];
 
+    // Add header formatting
+    const headerRow = worksheet.getRow(1);
+    headerRow.eachCell((cell) => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF2196F3' }
+      };
+      cell.font = {
+        bold: true,
+        color: { argb: 'FFFFFFFF' }
+      };
+      cell.alignment = { horizontal: 'center' };
+      cell.border = {
+        top: { style: 'thin' },
+        left: { style: 'thin' },
+        bottom: { style: 'thin' },
+        right: { style: 'thin' }
+      };
+    });
+
+    // Set column widths
+    worksheet.getColumn('A').width = 12; // Month
+    worksheet.getColumn('B').width = 12; // Terminal
+    worksheet.getColumn('C').width = 12; // Shipping No
+    worksheet.getColumn('D').width = 12; // Dock Code
+    worksheet.getColumn('E').width = 20; // Route
+    worksheet.getColumn('F').width = 12; // Prep Start
+    worksheet.getColumn('G').width = 12; // Prep End
+    worksheet.getColumn('H').width = 12; // Load Start
+    worksheet.getColumn('I').width = 12; // Load End
+    worksheet.getColumn('J').width = 12; // Status Prep
+    worksheet.getColumn('K').width = 12; // Status Load
+
     // Add sample data
     worksheet.addRows([
       ['2024-01', 'A', 'SHP001', 'DOCK-A1', 'Bangkok-Chonburi', '08:00', '08:30', '09:00', '10:00', 'Finished', 'Finished'],
-      ['2024-01', 'B', 'SHP002', 'DOCK-B1', 'Bangkok-Rayong', '09:00', '09:30', '10:00', '', 'Finished', 'On Process'],
-      ['2024-02', 'C', 'SHP003', 'DOCK-C1', 'Bangkok-Pattaya', '10:00', '', '', '', 'On Process', 'On Process']
+      ['2024-02', 'B', 'SHP002', 'DOCK-B1', 'Bangkok-Rayong', '09:00', '09:30', '10:00', '', 'Finished', 'On Process'],
+      ['2024-03', 'C', 'SHP003', 'DOCK-C1', 'Bangkok-Pattaya', '10:00', '', '', '', 'On Process', 'On Process']
     ]);
+
+    // Add instructions sheet
+    const instructions = workbook.addWorksheet('Instructions');
+    instructions.getCell('A1').value = 'Monthly Import Instructions:';
+    instructions.getCell('A1').font = { bold: true, size: 14 };
+    instructions.getCell('A3').value = '1. Fill in the Template sheet with your monthly truck data';
+    instructions.getCell('A4').value = '2. Required fields: Month, Terminal, Shipping No, Dock Code, Route';
+    instructions.getCell('A5').value = '3. Month format: YYYY-MM (e.g., 2024-01 for January 2024)';
+    instructions.getCell('A6').value = '4. Optional fields: Time fields and Status fields';
+    instructions.getCell('A7').value = '5. Valid status values: "On Process", "Delay", "Finished"';
+    instructions.getCell('A8').value = '6. Time format: HH:MM (24-hour format)';
+    instructions.getCell('A9').value = '7. Each row will create daily records for the entire month';
+    instructions.getCell('A10').value = '8. Save the file and upload through the Management page';
 
     // Generate buffer
     const buffer = await workbook.xlsx.writeBuffer();
 
-    console.log('✅ Template generated, size:', buffer.byteLength, 'bytes')
+    console.log('✅ Template generated, size:', buffer.byteLength, 'bytes');
     
     // Return Excel file with proper headers
     return new Response(buffer, {
       status: 200,
       headers: {
         'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'Content-Disposition': 'attachment; filename="truck_monthly_template.xlsx"',
+        'Content-Disposition': 'attachment; filename="truck_monthly_import_template.xlsx"',
         'Content-Length': buffer.byteLength.toString(),
         'Cache-Control': 'no-cache, no-store, must-revalidate',
         'Pragma': 'no-cache',
@@ -684,7 +744,7 @@ app.get('/api/trucks/template/json', createAuthMiddleware('viewer'), async (c) =
   try {
     const template = {
       headers: [
-        'Month (YYYY-MM)',
+        'Month',
         'Terminal', 
         'Shipping No',
         'Dock Code',
@@ -698,7 +758,7 @@ app.get('/api/trucks/template/json', createAuthMiddleware('viewer'), async (c) =
       ],
       sample_data: [
         {
-          'Month (YYYY-MM)': '2024-01',
+          'Month': '2024-01',
           'Terminal': 'A',
           'Shipping No': 'SHP001',
           'Dock Code': 'DOCK-A1',
@@ -739,7 +799,7 @@ app.get('/api/trucks/template/debug', async (c) => {
       method: c.req.method,
       url: c.req.url,
       available_endpoints: [
-        'GET /api/trucks/template - Download CSV template (requires auth)',
+        'GET /api/trucks/template - Download Excel template (requires auth)',
         'GET /api/trucks/export - Export data as CSV (requires auth)',
         'GET /api/trucks/template/json - Get template as JSON (requires auth)',
         'GET /api/trucks/template/debug - This debug endpoint (no auth)'
@@ -916,7 +976,7 @@ app.post('/api/trucks/import/preview', createAuthMiddleware('user'), async (c) =
 
         // Validate month
         const monthStr = row['Month']?.toString().trim()
-        if (!monthStr) {
+        if (!monthStr || monthStr === '') {
           errors.push(`Row ${index + 2}: Month is required`)
           return
         }
@@ -942,21 +1002,40 @@ app.post('/api/trucks/import/preview', createAuthMiddleware('user'), async (c) =
         for (const [excelCol, dbCol] of Object.entries(requiredColumns)) {
           if (excelCol === 'Month') continue
           const value = row[excelCol]?.toString().trim()
-          if (!value) {
+          if (!value || value === '') {
             errors.push(`Row ${index + 2}: ${excelCol} is required`)
             return
           }
           truckTemplate[dbCol] = value
         }
 
-        // Process optional columns
+        // Process optional columns, ensuring time fields are formatted as HH:MM
         for (const [excelCol, dbCol] of Object.entries(optionalColumns)) {
           if (excelCol in row) {
             const value = row[excelCol]
-            if (value !== undefined && value !== '') {
-              truckTemplate[dbCol] = value.toString()
+            if (value !== undefined && value !== '' && !isNaN(value)) {
+              if (['preparation_start', 'preparation_end', 'loading_start', 'loading_end'].includes(dbCol)) {
+                // Handle time fields (ensure HH:MM format)
+                try {
+                  if (typeof value === 'object' && value instanceof Date) {
+                    truckTemplate[dbCol] = value.toTimeString().slice(0, 5); // Format as HH:MM
+                  } else {
+                    const timeStr = value.toString().trim();
+                    const [hours, minutes] = timeStr.split(':');
+                    if (hours && minutes && !isNaN(hours) && !isNaN(minutes)) {
+                      truckTemplate[dbCol] = `${hours.padStart(2, '0')}:${minutes.padStart(2, '0')}`;
+                    } else {
+                      truckTemplate[dbCol] = timeStr; // Fallback to original if invalid
+                    }
+                  }
+                } catch (e) {
+                  truckTemplate[dbCol] = value.toString().trim();
+                }
+              } else {
+                truckTemplate[dbCol] = value.toString().trim();
+              }
             } else {
-              truckTemplate[dbCol] = null
+              truckTemplate[dbCol] = null;
             }
           }
         }
@@ -1007,7 +1086,7 @@ app.post('/api/trucks/import/preview', createAuthMiddleware('user'), async (c) =
   }
 })
 
-// Confirm Excel import
+// Confirm Excel import (ensure time fields are preserved)
 app.post('/api/trucks/import/confirm', createAuthMiddleware('user'), async (c) => {
   try {
     const { session_id } = await c.req.json()
