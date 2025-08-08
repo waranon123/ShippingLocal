@@ -777,82 +777,116 @@ app.delete('/api/users/:id', createAuthMiddleware('admin'), async (c) => {
 })
 
 // Download import template
-app.get('/api/trucks/template', async (c) => {
+app.get('/api/trucks/template', createAuthMiddleware('viewer'), async (c) => {
   try {
-    const workbook = {
-      SheetNames: ['Template', 'Instructions'],
-      Sheets: {
-        Template: utils.json_to_sheet([
-          {
-            Month: '2024-01',
-            Terminal: 'A',
-            'Shipping No': 'SHP001',
-            'Dock Code': 'DOCK-A1',
-            Route: 'Bangkok-Chonburi',
-            'Prep Start': '08:00',
-            'Prep End': '08:30',
-            'Load Start': '09:00',
-            'Load End': '10:00',
-            'Status Prep': 'Finished',
-            'Status Load': 'Finished'
-          },
-          {
-            Month: '2024-02',
-            Terminal: 'B',
-            'Shipping No': 'SHP002',
-            'Dock Code': 'DOCK-B1',
-            Route: 'Bangkok-Rayong',
-            'Prep Start': '09:00',
-            'Prep End': '09:30',
-            'Load Start': '10:00',
-            'Load End': '',
-            'Status Prep': 'Finished',
-            'Status Load': 'On Process'
-          },
-          {
-            Month: '2024-03',
-            Terminal: 'C',
-            'Shipping No': 'SHP003',
-            'Dock Code': 'DOCK-C1',
-            Route: 'Bangkok-Pattaya',
-            'Prep Start': '10:00',
-            'Prep End': '',
-            'Load Start': '',
-            'Load End': '',
-            'Status Prep': 'On Process',
-            'Status Load': 'On Process'
-          }
-        ], {
-          header: ['Month', 'Terminal', 'Shipping No', 'Dock Code', 'Route', 
-                  'Prep Start', 'Prep End', 'Load Start', 'Load End', 
-                  'Status Prep', 'Status Load']
-        }),
-        Instructions: utils.json_to_sheet([
-          { Instructions: 'Monthly Import Instructions:' },
-          { Instructions: '' },
-          { Instructions: '1. Fill in the Template sheet with your monthly truck data' },
-          { Instructions: '2. Required fields: Month (YYYY-MM), Terminal, Shipping No, Dock Code, Route' },
-          { Instructions: '3. Month format: 2024-01 (will create records for all days in January 2024)' },
-          { Instructions: '4. Optional fields: Time fields and Status fields' },
-          { Instructions: '5. Valid status values: "On Process", "Delay", "Finished"' },
-          { Instructions: '6. Time format: HH:MM (24-hour format)' },
-          { Instructions: '7. Each row will create daily records for the entire month' },
-          { Instructions: '8. Save the file and upload through the Management page' }
-        ])
-      }
-    }
-
-    const buffer = utils.book_to_buffer(workbook)
+    console.log('Template download requested')
     
-    return new Response(buffer, {
+    // Generate CSV template instead of Excel for Cloudflare Workers
+    // Since Workers doesn't have native Excel generation, we'll use CSV
+    const csvHeaders = [
+      'Month (YYYY-MM)',
+      'Terminal',
+      'Shipping No',
+      'Dock Code',
+      'Route',
+      'Prep Start',
+      'Prep End',
+      'Load Start',
+      'Load End',
+      'Status Prep',
+      'Status Load'
+    ]
+    
+    const sampleData = [
+      ['2024-01', 'A', 'SHP001', 'DOCK-A1', 'Bangkok-Chonburi', '08:00', '08:30', '09:00', '10:00', 'Finished', 'Finished'],
+      ['2024-01', 'B', 'SHP002', 'DOCK-B1', 'Bangkok-Rayong', '09:00', '09:30', '10:00', '', 'Finished', 'On Process'],
+      ['2024-02', 'C', 'SHP003', 'DOCK-C1', 'Bangkok-Pattaya', '10:00', '', '', '', 'On Process', 'On Process']
+    ]
+    
+    // Build CSV content
+    const csvContent = [
+      csvHeaders.join(','),
+      ...sampleData.map(row => row.map(cell => 
+        // Wrap in quotes if contains comma or is empty
+        cell.includes(',') || cell === '' ? `"${cell}"` : cell
+      ).join(','))
+    ].join('\n')
+    
+    // Return CSV file
+    return new Response(csvContent, {
       headers: {
-        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'Content-Disposition': 'attachment; filename=truck_monthly_import_template.xlsx'
+        'Content-Type': 'text/csv',
+        'Content-Disposition': 'attachment; filename="truck_monthly_template.csv"',
+        'Cache-Control': 'no-cache'
       }
     })
+    
   } catch (error) {
-    console.error('Template download error:', error)
+    console.error('Template generation error:', error)
     return c.json({ detail: 'Failed to generate template: ' + error.message }, 500)
+  }
+})
+
+// Alternative: Return template as JSON with base64 encoded Excel-like structure
+app.get('/api/trucks/template/json', createAuthMiddleware('viewer'), async (c) => {
+  try {
+    // Return template structure as JSON
+    const template = {
+      headers: [
+        'Month (YYYY-MM)',
+        'Terminal', 
+        'Shipping No',
+        'Dock Code',
+        'Route',
+        'Prep Start',
+        'Prep End',
+        'Load Start',
+        'Load End',
+        'Status Prep',
+        'Status Load'
+      ],
+      sample_data: [
+        {
+          'Month (YYYY-MM)': '2024-01',
+          'Terminal': 'A',
+          'Shipping No': 'SHP001',
+          'Dock Code': 'DOCK-A1',
+          'Route': 'Bangkok-Chonburi',
+          'Prep Start': '08:00',
+          'Prep End': '08:30',
+          'Load Start': '09:00',
+          'Load End': '10:00',
+          'Status Prep': 'Finished',
+          'Status Load': 'Finished'
+        },
+        {
+          'Month (YYYY-MM)': '2024-01',
+          'Terminal': 'B',
+          'Shipping No': 'SHP002',
+          'Dock Code': 'DOCK-B1',
+          'Route': 'Bangkok-Rayong',
+          'Prep Start': '09:00',
+          'Prep End': '09:30',
+          'Load Start': '10:00',
+          'Load End': '',
+          'Status Prep': 'Finished',
+          'Status Load': 'On Process'
+        }
+      ],
+      instructions: {
+        monthly_import: 'Each row creates daily records for the entire month',
+        date_format: 'YYYY-MM (e.g., 2024-01 for January 2024)',
+        time_format: 'HH:MM (24-hour format)',
+        status_values: ['On Process', 'Delay', 'Finished'],
+        note: 'Shipping numbers will be auto-suffixed with dates (e.g., SHP001_20240101)'
+      }
+    }
+    
+    return c.json(template)
+    
+  } catch (error) {
+    console.error('Template JSON generation error:', error)
+    return c.json({ detail: 'Failed to generate template JSON: ' + error.message }, 500)
   }
 })
 
