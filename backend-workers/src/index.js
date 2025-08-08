@@ -642,19 +642,19 @@ app.get('/api/trucks/template', createAuthMiddleware('viewer'), async (c) => {
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Template');
 
-    // Define headers to match Python code
+    // Define headers to match import columns exactly
     worksheet.columns = [
-      { header: 'Month', key: 'month' },
-      { header: 'Terminal', key: 'terminal' },
-      { header: 'Shipping No', key: 'shipping_no' },
-      { header: 'Dock Code', key: 'dock_code' },
-      { header: 'Route', key: 'route' },
-      { header: 'Prep Start', key: 'prep_start' },
-      { header: 'Prep End', key: 'prep_end' },
-      { header: 'Load Start', key: 'load_start' },
-      { header: 'Load End', key: 'load_end' },
-      { header: 'Status Prep', key: 'status_prep' },
-      { header: 'Status Load', key: 'status_load' }
+      { header: 'Month', key: 'month', width: 12 },
+      { header: 'Terminal', key: 'terminal', width: 12 },
+      { header: 'Shipping No', key: 'shipping_no', width: 15 },
+      { header: 'Dock Code', key: 'dock_code', width: 12 },
+      { header: 'Route', key: 'route', width: 20 },
+      { header: 'Prep Start', key: 'prep_start', width: 12 },
+      { header: 'Prep End', key: 'prep_end', width: 12 },
+      { header: 'Load Start', key: 'load_start', width: 12 },
+      { header: 'Load End', key: 'load_end', width: 12 },
+      { header: 'Status Prep', key: 'status_prep', width: 12 },
+      { header: 'Status Load', key: 'status_load', width: 12 }
     ];
 
     // Add header formatting
@@ -678,38 +678,40 @@ app.get('/api/trucks/template', createAuthMiddleware('viewer'), async (c) => {
       };
     });
 
-    // Set column widths
-    worksheet.getColumn('A').width = 12; // Month
-    worksheet.getColumn('B').width = 12; // Terminal
-    worksheet.getColumn('C').width = 12; // Shipping No
-    worksheet.getColumn('D').width = 12; // Dock Code
-    worksheet.getColumn('E').width = 20; // Route
-    worksheet.getColumn('F').width = 12; // Prep Start
-    worksheet.getColumn('G').width = 12; // Prep End
-    worksheet.getColumn('H').width = 12; // Load Start
-    worksheet.getColumn('I').width = 12; // Load End
-    worksheet.getColumn('J').width = 12; // Status Prep
-    worksheet.getColumn('K').width = 12; // Status Load
-
-    // Add sample data
+    // Add sample data with proper time formatting
     worksheet.addRows([
       ['2024-01', 'A', 'SHP001', 'DOCK-A1', 'Bangkok-Chonburi', '08:00', '08:30', '09:00', '10:00', 'Finished', 'Finished'],
-      ['2024-02', 'B', 'SHP002', 'DOCK-B1', 'Bangkok-Rayong', '09:00', '09:30', '10:00', '', 'Finished', 'On Process'],
-      ['2024-03', 'C', 'SHP003', 'DOCK-C1', 'Bangkok-Pattaya', '10:00', '', '', '', 'On Process', 'On Process']
+      ['2024-02', 'B', 'SHP002', 'DOCK-B1', 'Bangkok-Rayong', '09:00', '09:30', '10:00', '11:30', 'Finished', 'On Process'],
+      ['2024-03', 'C', 'SHP003', 'DOCK-C1', 'Bangkok-Pattaya', '10:00', '10:15', '11:00', '12:45', 'On Process', 'On Process']
     ]);
+
+    // Format time columns as text to prevent Excel from converting them
+    const timeColumns = ['F', 'G', 'H', 'I']; // Prep Start, Prep End, Load Start, Load End
+    timeColumns.forEach(col => {
+      worksheet.getColumn(col).numFmt = '@'; // Text format
+    });
 
     // Add instructions sheet
     const instructions = workbook.addWorksheet('Instructions');
     instructions.getCell('A1').value = 'Monthly Import Instructions:';
     instructions.getCell('A1').font = { bold: true, size: 14 };
-    instructions.getCell('A3').value = '1. Fill in the Template sheet with your monthly truck data';
-    instructions.getCell('A4').value = '2. Required fields: Month, Terminal, Shipping No, Dock Code, Route';
-    instructions.getCell('A5').value = '3. Month format: YYYY-MM (e.g., 2024-01 for January 2024)';
-    instructions.getCell('A6').value = '4. Optional fields: Time fields and Status fields';
-    instructions.getCell('A7').value = '5. Valid status values: "On Process", "Delay", "Finished"';
-    instructions.getCell('A8').value = '6. Time format: HH:MM (24-hour format)';
-    instructions.getCell('A9').value = '7. Each row will create daily records for the entire month';
-    instructions.getCell('A10').value = '8. Save the file and upload through the Management page';
+    
+    const instructionTexts = [
+      '1. Fill in the Template sheet with your monthly truck data',
+      '2. Required fields: Month, Terminal, Shipping No, Dock Code, Route',
+      '3. Month format: YYYY-MM (e.g., 2024-01 for January 2024)',
+      '4. Time format: HH:MM (e.g., 08:00, 14:30)',
+      '5. Keep time fields as text format - do not let Excel convert to time',
+      '6. Valid status values: "On Process", "Delay", "Finished"',
+      '7. Each row will create daily records for the entire month',
+      '8. Example: Month "2024-01" creates 31 daily records (Jan 1-31)',
+      '9. Save the file and upload through the Management page',
+      '10. Time fields will be copied to all daily records for that month'
+    ];
+    
+    instructionTexts.forEach((text, index) => {
+      instructions.getCell(`A${index + 3}`).value = text;
+    });
 
     // Generate buffer
     const buffer = await workbook.xlsx.writeBuffer();
@@ -970,10 +972,60 @@ app.post('/api/trucks/import/preview', createAuthMiddleware('user'), async (c) =
     const errors = []
     let totalRecordsToCreate = 0
 
+    // Helper function to format time from Excel
+    const formatTimeField = (value) => {
+      if (!value || value === '' || value === null) return null
+      
+      try {
+        // If it's already a string in HH:MM format
+        if (typeof value === 'string') {
+          const timeMatch = value.match(/^(\d{1,2}):(\d{2})$/)
+          if (timeMatch) {
+            const hours = String(timeMatch[1]).padStart(2, '0')
+            const minutes = String(timeMatch[2]).padStart(2, '0')
+            return `${hours}:${minutes}`
+          }
+        }
+        
+        // If it's a decimal number (Excel time format)
+        if (typeof value === 'number') {
+          // Excel stores time as decimal (0.5 = 12:00)
+          const totalMinutes = Math.round(value * 24 * 60)
+          const hours = Math.floor(totalMinutes / 60)
+          const minutes = totalMinutes % 60
+          return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
+        }
+        
+        // If it's a Date object from Excel
+        if (value instanceof Date) {
+          const hours = value.getHours()
+          const minutes = value.getMinutes()
+          return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
+        }
+        
+        // Try to parse as string and extract time
+        const valueStr = String(value).trim()
+        if (valueStr.includes(':')) {
+          const parts = valueStr.split(':')
+          if (parts.length >= 2) {
+            const hours = parseInt(parts[0]) || 0
+            const minutes = parseInt(parts[1]) || 0
+            return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
+          }
+        }
+        
+        console.log('⚠️ Could not format time value:', value, typeof value)
+        return null
+      } catch (error) {
+        console.error('❌ Time formatting error:', error, 'Value:', value)
+        return null
+      }
+    }
+
     data.forEach((row, index) => {
       try {
         const truckTemplate = {}
-
+        
         // Validate month
         const monthStr = row['Month']?.toString().trim()
         if (!monthStr || monthStr === '') {
@@ -1009,34 +1061,25 @@ app.post('/api/trucks/import/preview', createAuthMiddleware('user'), async (c) =
           truckTemplate[dbCol] = value
         }
 
-        // Process optional columns, ensuring time fields are formatted as HH:MM
+        // Process optional columns with proper time formatting
         for (const [excelCol, dbCol] of Object.entries(optionalColumns)) {
           if (excelCol in row) {
             const value = row[excelCol]
-            if (value !== undefined && value !== '' && !isNaN(value)) {
-              if (['preparation_start', 'preparation_end', 'loading_start', 'loading_end'].includes(dbCol)) {
-                // Handle time fields (ensure HH:MM format)
-                try {
-                  if (typeof value === 'object' && value instanceof Date) {
-                    truckTemplate[dbCol] = value.toTimeString().slice(0, 5); // Format as HH:MM
-                  } else {
-                    const timeStr = value.toString().trim();
-                    const [hours, minutes] = timeStr.split(':');
-                    if (hours && minutes && !isNaN(hours) && !isNaN(minutes)) {
-                      truckTemplate[dbCol] = `${hours.padStart(2, '0')}:${minutes.padStart(2, '0')}`;
-                    } else {
-                      truckTemplate[dbCol] = timeStr; // Fallback to original if invalid
-                    }
-                  }
-                } catch (e) {
-                  truckTemplate[dbCol] = value.toString().trim();
-                }
-              } else {
-                truckTemplate[dbCol] = value.toString().trim();
-              }
+            
+            // Handle time fields specially
+            if (['preparation_start', 'preparation_end', 'loading_start', 'loading_end'].includes(dbCol)) {
+              truckTemplate[dbCol] = formatTimeField(value)
+              console.log(`🕒 Time field ${dbCol}: ${value} -> ${truckTemplate[dbCol]}`)
             } else {
-              truckTemplate[dbCol] = null;
+              // Handle status fields
+              if (value !== undefined && value !== null && value !== '') {
+                truckTemplate[dbCol] = String(value).trim()
+              } else {
+                truckTemplate[dbCol] = null
+              }
             }
+          } else {
+            truckTemplate[dbCol] = null
           }
         }
 
@@ -1132,34 +1175,59 @@ app.post('/api/trucks/import/confirm', createAuthMiddleware('user'), async (c) =
               shipping_no: baseShippingNo,
               dock_code: truckTemplate.dock_code,
               truck_route: truckTemplate.truck_route,
-              preparation_start: truckTemplate.preparation_start,
-              preparation_end: truckTemplate.preparation_end,
-              loading_start: truckTemplate.loading_start,
-              loading_end: truckTemplate.loading_end,
-              status_preparation: truckTemplate.status_preparation,
-              status_loading: truckTemplate.status_loading,
+              // *** FIX: Ensure time fields are properly saved ***
+              preparation_start: truckTemplate.preparation_start || null,
+              preparation_end: truckTemplate.preparation_end || null,
+              loading_start: truckTemplate.loading_start || null,
+              loading_end: truckTemplate.loading_end || null,
+              status_preparation: truckTemplate.status_preparation || 'On Process',
+              status_loading: truckTemplate.status_loading || 'On Process',
               created_at: recordDate,
               updated_at: getCurrentTimestamp()
             }
 
+            console.log(`📝 Saving truck data for ${recordDate}:`, {
+              shipping_no: truckData.shipping_no,
+              preparation_start: truckData.preparation_start,
+              preparation_end: truckData.preparation_end,
+              loading_start: truckData.loading_start,
+              loading_end: truckData.loading_end
+            })
+
             if (existing) {
-              // Update existing record
-              const updateFields = []
-              const params = []
-
-              for (const [key, value] of Object.entries(truckData)) {
-                if (key !== 'id' && value !== undefined) {
-                  updateFields.push(`${key} = ?`)
-                  params.push(value)
-                }
-              }
-              params.push(existing.id)
-
+              // Update existing record with all fields including times
               await db.prepare(`
-                UPDATE trucks SET ${updateFields.join(', ')} WHERE id = ?
-              `).bind(...params).run()
+                UPDATE trucks SET 
+                  terminal = ?, 
+                  shipping_no = ?, 
+                  dock_code = ?, 
+                  truck_route = ?,
+                  preparation_start = ?, 
+                  preparation_end = ?, 
+                  loading_start = ?, 
+                  loading_end = ?,
+                  status_preparation = ?, 
+                  status_loading = ?, 
+                  updated_at = ?
+                WHERE id = ?
+              `).bind(
+                truckData.terminal,
+                truckData.shipping_no,
+                truckData.dock_code,
+                truckData.truck_route,
+                truckData.preparation_start,
+                truckData.preparation_end,
+                truckData.loading_start,
+                truckData.loading_end,
+                truckData.status_preparation,
+                truckData.status_loading,
+                truckData.updated_at,
+                existing.id
+              ).run()
+              
+              console.log(`✅ Updated existing truck: ${existing.id}`)
             } else {
-              // Create new record
+              // Create new record with all fields including times
               await db.prepare(`
                 INSERT INTO trucks (
                   id, terminal, shipping_no, dock_code, truck_route,
@@ -1181,6 +1249,8 @@ app.post('/api/trucks/import/confirm', createAuthMiddleware('user'), async (c) =
                 truckData.created_at,
                 truckData.updated_at
               ).run()
+              
+              console.log(`✅ Created new truck: ${truckData.id}`)
             }
 
             importedCount++
@@ -1192,6 +1262,7 @@ app.post('/api/trucks/import/confirm', createAuthMiddleware('user'), async (c) =
               shipping_no: baseShippingNo,
               error: dayError.message
             })
+            console.error(`❌ Failed to import day ${day}:`, dayError)
           }
         }
       } catch (templateError) {
@@ -1200,6 +1271,7 @@ app.post('/api/trucks/import/confirm', createAuthMiddleware('user'), async (c) =
           shipping_no: truckTemplate.shipping_no || 'Unknown',
           error: templateError.message
         })
+        console.error(`❌ Failed to import template ${templateIndex + 1}:`, templateError)
       }
     }
 

@@ -691,28 +691,32 @@ async def get_trucks(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
+// Python version - แก้ไข backend/app/main.py template endpoint
 @app.get("/api/trucks/template")
 async def download_import_template():
     template_data = {
-        'Month': ['2024-01', '2024-02', '2024-03'],  # New Month column
+        'Month': ['2024-01', '2024-02', '2024-03'],
         'Terminal': ['A', 'B', 'C'],
         'Shipping No': ['SHP001', 'SHP002', 'SHP003'],
         'Dock Code': ['DOCK-A1', 'DOCK-B1', 'DOCK-C1'],
         'Route': ['Bangkok-Chonburi', 'Bangkok-Rayong', 'Bangkok-Pattaya'],
-        'Prep Start': ['08:00', '09:00', '10:00'],
-        'Prep End': ['08:30', '09:30', ''],
-        'Load Start': ['09:00', '10:00', ''],
-        'Load End': ['10:00', '', ''],
+        'Prep Start': ['08:00', '09:00', '10:00'],  # Fixed: proper time format
+        'Prep End': ['08:30', '09:30', '10:15'],    # Fixed: proper time format
+        'Load Start': ['09:00', '10:00', '11:00'],  # Fixed: proper time format
+        'Load End': ['10:00', '11:30', '12:45'],    # Fixed: proper time format
         'Status Prep': ['Finished', 'Finished', 'On Process'],
         'Status Load': ['Finished', 'On Process', 'On Process']
     }
     
     df = pd.DataFrame(template_data)
     output = io.BytesIO()
+    
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df.to_excel(writer, sheet_name='Template', index=False)
         workbook = writer.book
         worksheet = writer.sheets['Template']
+        
+        # Header formatting
         header_format = workbook.add_format({
             'bold': True,
             'bg_color': '#2196F3',
@@ -720,32 +724,44 @@ async def download_import_template():
             'border': 1,
             'align': 'center'
         })
-        instructions = workbook.add_worksheet('Instructions')
-        instructions.write('A1', 'Monthly Import Instructions:', workbook.add_format({'bold': True, 'size': 14}))
-        instructions.write('A3', '1. Fill in the Template sheet with your monthly truck data')
-        instructions.write('A4', '2. Required fields: Month (YYYY-MM), Terminal, Shipping No, Dock Code, Route')
-        instructions.write('A5', '3. Month format: 2024-01 (will create records for all days in January 2024)')
-        instructions.write('A6', '4. Optional fields: Time fields and Status fields')
-        instructions.write('A7', '5. Valid status values: "On Process", "Delay", "Finished"')
-        instructions.write('A8', '6. Time format: HH:MM (24-hour format)')
-        instructions.write('A9', '7. Each row will create daily records for the entire month')
-        instructions.write('A10', '8. Save the file and upload through the Management page')
         
+        # Time format - keep as text to prevent Excel auto-conversion
+        time_format = workbook.add_format({'num_format': '@'})
+        
+        # Apply header format
         for col_num, value in enumerate(df.columns.values):
             worksheet.write(0, col_num, value, header_format)
         
-        # Set column widths
+        # Format time columns as text (columns F, G, H, I = 5, 6, 7, 8)
+        worksheet.set_column('F:I', 12, time_format)  # Time columns
+        
+        # Set other column widths
         worksheet.set_column('A:A', 12)  # Month
         worksheet.set_column('B:B', 12)  # Terminal
-        worksheet.set_column('C:C', 12)  # Shipping No
+        worksheet.set_column('C:C', 15)  # Shipping No
         worksheet.set_column('D:D', 12)  # Dock Code
         worksheet.set_column('E:E', 20)  # Route
-        worksheet.set_column('F:F', 12)  # Prep Start
-        worksheet.set_column('G:G', 12)  # Prep End
-        worksheet.set_column('H:H', 12)  # Load Start
-        worksheet.set_column('I:I', 12)  # Load End
-        worksheet.set_column('J:J', 12)  # Status Prep
-        worksheet.set_column('K:K', 12)  # Status Load
+        worksheet.set_column('J:K', 12)  # Status columns
+        
+        # Instructions sheet
+        instructions = workbook.add_worksheet('Instructions')
+        instructions.write('A1', 'Monthly Import Instructions:', workbook.add_format({'bold': True, 'size': 14}))
+        
+        instruction_list = [
+            '1. Fill in the Template sheet with your monthly truck data',
+            '2. Required fields: Month, Terminal, Shipping No, Dock Code, Route',
+            '3. Month format: YYYY-MM (e.g., 2024-01 for January 2024)',
+            '4. Time format: HH:MM (e.g., 08:00, 14:30)',
+            '5. Keep time fields as text - do not let Excel convert to time',
+            '6. Valid status values: "On Process", "Delay", "Finished"',
+            '7. Each row creates daily records for the entire month',
+            '8. Example: "2024-01" creates 31 records (Jan 1-31, 2024)',
+            '9. Time fields are copied to all daily records',
+            '10. Save and upload through Management page'
+        ]
+        
+        for i, instruction in enumerate(instruction_list):
+            instructions.write(f'A{i+3}', instruction)
     
     output.seek(0)
     return Response(
@@ -753,8 +769,9 @@ async def download_import_template():
         media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         headers={'Content-Disposition': 'attachment; filename=truck_monthly_import_template.xlsx'}
     )
-
 # Update the preview import endpoint
+# แก้ไข backend/app/main.py - ส่วน import preview และ confirm
+
 @app.post("/api/trucks/import/preview")
 async def preview_excel_import(
     file: UploadFile = File(...),
@@ -791,6 +808,54 @@ async def preview_excel_import(
         trucks_preview = []
         errors = []
         total_records_to_create = 0
+        
+        def format_time_field(value):
+            """แปลงค่าเวลาจาก Excel ให้เป็น HH:MM format"""
+            if pd.isna(value) or value == '' or value is None:
+                return None
+            
+            try:
+                # ถ้าเป็น string แล้ว
+                if isinstance(value, str):
+                    value = value.strip()
+                    if not value:
+                        return None
+                    # ตรวจสอบรูปแบบ HH:MM
+                    if ':' in value:
+                        parts = value.split(':')
+                        if len(parts) >= 2:
+                            hours = int(parts[0])
+                            minutes = int(parts[1])
+                            return f"{hours:02d}:{minutes:02d}"
+                    return value
+                
+                # ถ้าเป็น number (Excel time format: 0.5 = 12:00)
+                if isinstance(value, (int, float)):
+                    # Excel stores time as decimal fraction of a day
+                    total_minutes = int(value * 24 * 60)
+                    hours = total_minutes // 60
+                    minutes = total_minutes % 60
+                    return f"{hours:02d}:{minutes:02d}"
+                
+                # ถ้าเป็น datetime object
+                if hasattr(value, 'hour') and hasattr(value, 'minute'):
+                    return f"{value.hour:02d}:{value.minute:02d}"
+                
+                # ลองแปลงเป็น string แล้วประมวลผล
+                str_value = str(value).strip()
+                if ':' in str_value:
+                    parts = str_value.split(':')
+                    if len(parts) >= 2:
+                        hours = int(float(parts[0]))
+                        minutes = int(float(parts[1]))
+                        return f"{hours:02d}:{minutes:02d}"
+                
+                print(f"⚠️ Could not format time value: {value} (type: {type(value)})")
+                return None
+                
+            except Exception as e:
+                print(f"❌ Time formatting error: {e}, Value: {value}")
+                return None
         
         for index, row in df.iterrows():
             try:
@@ -829,28 +894,29 @@ async def preview_excel_import(
                         continue
                     truck_template[db_col] = str(value).strip()
                 
-                # Process optional columns
+                # Process optional columns - ใส่ใจกับ time fields
                 for excel_col, db_col in optional_columns.items():
                     if excel_col in df.columns:
                         value = row.get(excel_col)
-                        if not pd.isna(value):
-                            if 'start' in db_col or 'end' in db_col:
-                                try:
-                                    if isinstance(value, datetime):
-                                        truck_template[db_col] = value.strftime('%H:%M')
-                                    else:
-                                        truck_template[db_col] = str(value)
-                                except:
-                                    truck_template[db_col] = str(value)
-                            else:
-                                truck_template[db_col] = str(value)
+                        
+                        # Handle time fields specially
+                        if db_col in ['preparation_start', 'preparation_end', 'loading_start', 'loading_end']:
+                            formatted_time = format_time_field(value)
+                            truck_template[db_col] = formatted_time
+                            print(f"🕒 {db_col}: {value} -> {formatted_time}")
                         else:
-                            truck_template[db_col] = None
+                            # Handle status fields
+                            if not pd.isna(value) and str(value).strip():
+                                truck_template[db_col] = str(value).strip()
+                            else:
+                                truck_template[db_col] = None
+                    else:
+                        truck_template[db_col] = None
                 
                 # Set default statuses
-                if 'status_preparation' not in truck_template:
+                if 'status_preparation' not in truck_template or not truck_template['status_preparation']:
                     truck_template['status_preparation'] = 'On Process'
-                if 'status_loading' not in truck_template:
+                if 'status_loading' not in truck_template or not truck_template['status_loading']:
                     truck_template['status_loading'] = 'On Process'
                 
                 # Validate statuses
@@ -860,7 +926,7 @@ async def preview_excel_import(
                 if truck_template.get('status_loading') not in valid_statuses:
                     truck_template['status_loading'] = 'On Process'
                 
-                # Add sample preview (just show the template for preview)
+                # Add sample preview
                 preview_truck = truck_template.copy()
                 preview_truck['preview_days'] = days_in_month
                 trucks_preview.append(preview_truck)
@@ -890,8 +956,152 @@ async def preview_excel_import(
     except Exception as e:
         raise HTTPException(400, f"Error reading Excel file: {str(e)}")
 
-# Update the confirm import endpoint
-# Updated confirm import endpoint with fixed func import
+@app.post("/api/trucks/import/confirm")
+async def confirm_excel_import(
+    data: dict,
+    current_user: UserResponse = Depends(check_permission("user")),
+    db: Session = Depends(get_db)
+):
+    session_id = data.get('session_id')
+    session = import_sessions.get(session_id)
+    if not session:
+        raise HTTPException(400, "Import session not found or expired")
+
+    if session['user_id'] != current_user.id:
+        raise HTTPException(403, "Unauthorized")
+
+    truck_templates = session['truck_templates']
+    imported_count = 0
+    failed_imports = []
+
+    try:
+        for template_index, truck_template in enumerate(truck_templates):
+            try:
+                year = truck_template['year']
+                month = truck_template['month']
+                days_in_month = monthrange(year, month)[1]
+                base_shipping_no = truck_template['shipping_no']
+
+                # Create a record for each day of the month
+                for day in range(1, days_in_month + 1):
+                    try:
+                        record_date = date(year, month, day)
+
+                        # Check for existing record
+                        existing = db.query(Truck).filter(
+                            and_(
+                                Truck.shipping_no == base_shipping_no,
+                                func.date(Truck.created_at) == record_date
+                            )
+                        ).first()
+
+                        # *** FIX: เก็บ time fields ให้ครบ ***
+                        truck_data_dict = {
+                            'terminal': truck_template['terminal'],
+                            'shipping_no': base_shipping_no,
+                            'dock_code': truck_template['dock_code'],
+                            'truck_route': truck_template['truck_route'],
+                            'preparation_start': truck_template.get('preparation_start'),
+                            'preparation_end': truck_template.get('preparation_end'),
+                            'loading_start': truck_template.get('loading_start'),
+                            'loading_end': truck_template.get('loading_end'),
+                            'status_preparation': truck_template.get('status_preparation', 'On Process'),
+                            'status_loading': truck_template.get('status_loading', 'On Process'),
+                        }
+                        
+                        print(f"📝 Processing truck data for {record_date}:", {
+                            'shipping_no': truck_data_dict['shipping_no'],
+                            'preparation_start': truck_data_dict['preparation_start'],
+                            'preparation_end': truck_data_dict['preparation_end'],
+                            'loading_start': truck_data_dict['loading_start'],
+                            'loading_end': truck_data_dict['loading_end']
+                        })
+
+                        if existing:
+                            # Update existing record - ใส่ time fields ด้วย
+                            for key, value in truck_data_dict.items():
+                                setattr(existing, key, value)
+                            existing.updated_at = datetime.utcnow()
+                            created_truck = existing
+                            print(f"✅ Updated existing truck: {existing.id}")
+                        else:
+                            # Create new record - ใส่ time fields ด้วย
+                            db_truck = Truck(**truck_data_dict)
+                            db_truck.id = str(uuid.uuid4())
+                            db_truck.created_at = datetime.combine(record_date, datetime.min.time())
+                            db.add(db_truck)
+                            created_truck = db_truck
+                            print(f"✅ Created new truck: {db_truck.id}")
+
+                        db.commit()
+                        db.refresh(created_truck)
+                        imported_count += 1
+
+                        # Broadcast only for today's records to avoid spam
+                        if record_date == date.today():
+                            await manager.broadcast({
+                                "type": "truck_created",
+                                "data": {
+                                    "id": created_truck.id,
+                                    "terminal": created_truck.terminal,
+                                    "shipping_no": created_truck.shipping_no,
+                                    "dock_code": created_truck.dock_code,
+                                    "truck_route": created_truck.truck_route,
+                                    "preparation_start": created_truck.preparation_start,
+                                    "preparation_end": created_truck.preparation_end,
+                                    "loading_start": created_truck.loading_start,
+                                    "loading_end": created_truck.loading_end,
+                                    "status_preparation": created_truck.status_preparation,
+                                    "status_loading": created_truck.status_loading,
+                                    "created_at": created_truck.created_at.isoformat(),
+                                    "updated_at": created_truck.updated_at.isoformat() if created_truck.updated_at else None
+                                }
+                            })
+
+                    except Exception as day_error:
+                        print(f"❌ Day error for template {template_index + 1}, day {day}: {str(day_error)}")
+                        failed_imports.append({
+                            "template": template_index + 1,
+                            "day": day,
+                            "shipping_no": base_shipping_no,
+                            "error": str(day_error)
+                        })
+                        db.rollback()  # Rollback failed transaction
+
+            except Exception as template_error:
+                print(f"❌ Template error for template {template_index + 1}: {str(template_error)}")
+                failed_imports.append({
+                    "template": template_index + 1,
+                    "shipping_no": truck_template.get('shipping_no', 'Unknown'),
+                    "error": str(template_error)
+                })
+
+        # Clean up session
+        if session_id in import_sessions:
+            del import_sessions[session_id]
+
+        print(f"✅ Import completed: {imported_count} imported, {len(failed_imports)} failed")
+
+        return clean_for_json({
+            "success": True,
+            "imported": imported_count,
+            "failed": len(failed_imports),
+            "failed_details": failed_imports,
+            "message": f"Successfully imported {imported_count} daily records from monthly templates"
+        })
+
+    except Exception as e:
+        print(f"❌ Import exception: {str(e)}")
+        import traceback
+        traceback.print_exc()
+
+        # Clean up session on error
+        if session_id in import_sessions:
+            del import_sessions[session_id]
+
+        raise HTTPException(500, f"Import failed: {str(e)}")
+    
+
 @app.post("/api/trucks/import/confirm")
 async def confirm_excel_import(
     data: dict,
