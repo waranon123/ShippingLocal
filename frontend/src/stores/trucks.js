@@ -1,5 +1,4 @@
-// frontend/src/stores/trucks.js - Fixed with better error handling
-
+// frontend/src/stores/trucks.js - Complete version for Cloudflare Workers
 import { defineStore } from 'pinia'
 import axios from 'axios'
 
@@ -14,12 +13,47 @@ export const useTruckStore = defineStore('trucks', {
     },
     loading: false,
     error: null,
-    websocket: null,
     dateFilter: {
       fromDate: null,
       toDate: null
-    }
+    },
+    // Polling instead of WebSocket for Workers
+    pollingInterval: null,
+    isPolling: false,
+    lastPollingUpdate: null
   }),
+
+  getters: {
+    // Get trucks by status
+    trucksByPreparationStatus: (state) => (status) => {
+      return state.trucks.filter(truck => truck.status_preparation === status)
+    },
+    
+    trucksByLoadingStatus: (state) => (status) => {
+      return state.trucks.filter(truck => truck.status_loading === status)
+    },
+    
+    // Get trucks by terminal
+    trucksByTerminal: (state) => (terminal) => {
+      return state.trucks.filter(truck => truck.terminal === terminal)
+    },
+    
+    // Get unique terminals
+    uniqueTerminals: (state) => {
+      return [...new Set(state.trucks.map(truck => truck.terminal))].sort()
+    },
+    
+    // Get filtered trucks count
+    filteredTrucksCount: (state) => {
+      return state.trucks.length
+    },
+    
+    // Check if data is stale (for polling)
+    isDataStale: (state) => {
+      if (!state.lastPollingUpdate) return true
+      return Date.now() - state.lastPollingUpdate > 60000 // 1 minute
+    }
+  },
 
   actions: {
     // Validate truck data
@@ -34,9 +68,19 @@ export const useTruckStore = defineStore('trucks', {
         return false
       }
       
+      // Check required fields
+      const requiredFields = ['terminal', 'shipping_no', 'dock_code', 'truck_route']
+      for (const field of requiredFields) {
+        if (!truck[field]) {
+          console.warn(`⚠️ Truck missing required field: ${field}`, truck)
+          return false
+        }
+      }
+      
       return true
     },
 
+    // Fetch trucks with filters
     async fetchTrucks(filters = {}) {
       this.loading = true
       this.error = null
@@ -56,20 +100,17 @@ export const useTruckStore = defineStore('trucks', {
         })
 
         const params = new URLSearchParams(allFilters)
-        console.log('🚚 Fetching trucks with filters:', allFilters)
-        console.log('📋 URL params:', params.toString())
+        console.log('🚚 Fetching trucks from Workers API:', allFilters)
         
         const response = await axios.get(`/api/trucks?${params}`, {
           headers: {
             'Accept': 'application/json'
-          }
+          },
+          timeout: 15000 // 15 second timeout
         })
         
-        console.log('📦 Raw response data:', response.data)
-        console.log('📦 Response type:', typeof response.data)
-        console.log('📦 Is array:', Array.isArray(response.data))
+        console.log('📦 Workers response:', response.data)
         
-        // Validate response is array
         if (Array.isArray(response.data)) {
           // Filter and validate truck data
           const validTrucks = response.data.filter(truck => {
@@ -81,22 +122,22 @@ export const useTruckStore = defineStore('trucks', {
           })
           
           this.trucks = validTrucks
-          console.log('✅ Trucks loaded successfully:', this.trucks.length, 'valid items')
+          this.lastPollingUpdate = Date.now()
+          console.log('✅ Trucks loaded from Workers:', this.trucks.length, 'valid items')
           
           // Log sample data for debugging
           if (this.trucks.length > 0) {
             console.log('🔍 Sample truck data:', this.trucks[0])
-            console.log('🔍 Date format example:', this.trucks[0].created_at)
           }
         } else if (typeof response.data === 'string' && response.data.includes('<!DOCTYPE html>')) {
-          throw new Error('Received HTML instead of JSON - API connection issue')
+          throw new Error('Received HTML instead of JSON - Workers API connection issue')
         } else {
-          console.warn('⚠️ Unexpected response format:', typeof response.data, response.data)
+          console.warn('⚠️ Unexpected response format from Workers:', typeof response.data, response.data)
           this.trucks = []
         }
         
       } catch (error) {
-        console.error('❌ Failed to fetch trucks:', error)
+        console.error('❌ Failed to fetch trucks from Workers:', error)
         console.error('❌ Error details:', {
           message: error.message,
           status: error.response?.status,
@@ -108,25 +149,35 @@ export const useTruckStore = defineStore('trucks', {
         this.error = error.message || 'Failed to fetch trucks'
         this.trucks = []
         
-        // Show user-friendly error for API issues
+        // Enhanced error handling for Workers
         if (error.message.includes('Network Error') || error.code === 'ERR_NETWORK') {
-          this.error = 'Cannot connect to server. Please check if backend is running.'
+          this.error = 'Cannot connect to Workers API. Please check backend deployment.'
         } else if (error.response?.status === 404) {
-          this.error = 'API endpoint not found. Please check backend configuration.'
+          this.error = 'Workers API endpoint not found. Please check backend URL.'
+        } else if (error.response?.status === 401) {
+          this.error = 'Authentication failed. Please login again.'
+        } else if (error.response?.status === 403) {
+          this.error = 'Access denied. Insufficient permissions.'
+        } else if (error.response?.status >= 500) {
+          this.error = 'Workers backend error. Please try again later.'
+        } else if (error.code === 'ECONNABORTED') {
+          this.error = 'Request timeout. Workers may be cold starting.'
         } else if (error.message.includes('HTML')) {
-          this.error = 'API not accessible - check backend URL and configuration'
+          this.error = 'Workers API not accessible - check backend URL and configuration'
         }
       } finally {
         this.loading = false
       }
     },
 
+    // Set date filter
     setDateFilter(fromDate, toDate) {
-      console.log('📅 Setting date filter:', { fromDate, toDate })
+      console.log('📅 Setting date filter for Workers:', { fromDate, toDate })
       this.dateFilter.fromDate = fromDate
       this.dateFilter.toDate = toDate
     },
 
+    // Fetch statistics
     async fetchStats(filters = {}) {
       try {
         const allFilters = {
@@ -143,118 +194,217 @@ export const useTruckStore = defineStore('trucks', {
         })
 
         const params = new URLSearchParams(allFilters)
-        console.log('📊 Fetching stats with filters:', allFilters)
+        console.log('📊 Fetching stats from Workers:', allFilters)
         
         const response = await axios.get(`/api/stats?${params}`, {
           headers: {
             'Accept': 'application/json'
-          }
+          },
+          timeout: 10000
         })
         
         if (typeof response.data === 'object' && !Array.isArray(response.data)) {
-          this.stats = response.data
-          console.log('📊 Stats updated:', this.stats)
-        } else {
-          console.warn('⚠️ Unexpected stats response:', response.data)
+          // Ensure all required properties exist with defaults
           this.stats = {
-            total_trucks: 0,
-            preparation_stats: { 'On Process': 0, Delay: 0, Finished: 0 },
-            loading_stats: { 'On Process': 0, Delay: 0, Finished: 0 },
-            terminal_stats: {}
+            total_trucks: response.data.total_trucks || 0,
+            preparation_stats: {
+              'On Process': 0,
+              'Delay': 0,
+              'Finished': 0,
+              ...response.data.preparation_stats
+            },
+            loading_stats: {
+              'On Process': 0,
+              'Delay': 0,
+              'Finished': 0,
+              ...response.data.loading_stats
+            },
+            terminal_stats: response.data.terminal_stats || {}
           }
+          console.log('📊 Stats updated from Workers:', this.stats)
+        } else {
+          console.warn('⚠️ Unexpected stats response from Workers:', response.data)
+          this.resetStats()
         }
         
         return this.stats
       } catch (error) {
-        console.error('❌ Failed to fetch stats:', error)
-        this.stats = {
-          total_trucks: 0,
-          preparation_stats: { 'On Process': 0, Delay: 0, Finished: 0 },
-          loading_stats: { 'On Process': 0, Delay: 0, Finished: 0 },
-          terminal_stats: {}
-        }
+        console.error('❌ Failed to fetch stats from Workers:', error)
+        this.resetStats()
         return this.stats
       }
     },
 
+    // Reset stats to default values
+    resetStats() {
+      this.stats = {
+        total_trucks: 0,
+        preparation_stats: { 'On Process': 0, Delay: 0, Finished: 0 },
+        loading_stats: { 'On Process': 0, Delay: 0, Finished: 0 },
+        terminal_stats: {}
+      }
+    },
+
+    // Create new truck
     async createTruck(truckData) {
       try {
-        console.log('🚛 Creating truck:', truckData)
+        console.log('🚛 Creating truck in Workers:', truckData)
+        
+        // Validate required fields client-side
+        const requiredFields = ['terminal', 'shipping_no', 'dock_code', 'truck_route']
+        for (const field of requiredFields) {
+          if (!truckData[field]) {
+            throw new Error(`${field} is required`)
+          }
+        }
+        
         const response = await axios.post('/api/trucks', truckData, {
           headers: {
             'Accept': 'application/json',
             'Content-Type': 'application/json'
-          }
+          },
+          timeout: 15000
         })
-        console.log('✅ Truck created:', response.data)
         
-        // Validate created truck data
+        console.log('✅ Truck created in Workers:', response.data)
+        
         if (this.validateTruck(response.data)) {
+          // Add to local state immediately for better UX
+          this.trucks.unshift(response.data)
+          
+          // Refresh stats in background
+          this.fetchStats().catch(err => 
+            console.warn('Failed to refresh stats after create:', err)
+          )
+          
           return response.data
         } else {
-          throw new Error('Invalid truck data returned from server')
+          throw new Error('Invalid truck data returned from Workers')
         }
       } catch (error) {
-        console.error('❌ Failed to create truck:', error)
-        throw error
+        console.error('❌ Failed to create truck in Workers:', error)
+        
+        // Provide user-friendly error messages
+        if (error.response?.status === 400) {
+          throw new Error(error.response.data?.detail || 'Invalid truck data')
+        } else if (error.response?.status === 401) {
+          throw new Error('Authentication required')
+        } else if (error.response?.status === 403) {
+          throw new Error('Permission denied')
+        } else {
+          throw new Error(error.message || 'Failed to create truck')
+        }
       }
     },
 
-    async updateTruck(id, truckData) {
+    // Get single truck by ID
+    async getTruck(id) {
       try {
-        // Validate ID
         if (!id || typeof id !== 'string') {
           throw new Error('Invalid truck ID provided')
         }
         
-        console.log('🔄 Updating truck:', id, truckData)
+        console.log('🔍 Fetching truck by ID from Workers:', id)
+        const response = await axios.get(`/api/trucks/${id}`, {
+          headers: {
+            'Accept': 'application/json'
+          },
+          timeout: 10000
+        })
+        
+        if (this.validateTruck(response.data)) {
+          return response.data
+        } else {
+          throw new Error('Invalid truck data returned from Workers')
+        }
+      } catch (error) {
+        console.error('❌ Failed to get truck from Workers:', error)
+        
+        if (error.response?.status === 404) {
+          throw new Error('Truck not found')
+        } else {
+          throw new Error(error.message || 'Failed to fetch truck')
+        }
+      }
+    },
+
+    // Update truck
+    async updateTruck(id, truckData) {
+      try {
+        if (!id || typeof id !== 'string') {
+          throw new Error('Invalid truck ID provided')
+        }
+        
+        console.log('🔄 Updating truck in Workers:', id, truckData)
         const response = await axios.put(`/api/trucks/${id}`, truckData, {
           headers: {
             'Accept': 'application/json',
             'Content-Type': 'application/json'
-          }
+          },
+          timeout: 15000
         })
-        console.log('✅ Truck updated:', response.data)
         
-        // Validate updated truck data
+        console.log('✅ Truck updated in Workers:', response.data)
+        
         if (this.validateTruck(response.data)) {
           // Update local state
           const index = this.trucks.findIndex(t => t.id === id)
           if (index !== -1) {
             this.trucks[index] = response.data
           }
+          
+          // Refresh stats in background
+          this.fetchStats().catch(err => 
+            console.warn('Failed to refresh stats after update:', err)
+          )
+          
           return response.data
         } else {
-          throw new Error('Invalid truck data returned from server')
+          throw new Error('Invalid truck data returned from Workers')
         }
       } catch (error) {
-        console.error('❌ Failed to update truck:', error)
-        throw error
+        console.error('❌ Failed to update truck in Workers:', error)
+        
+        if (error.response?.status === 404) {
+          throw new Error('Truck not found')
+        } else if (error.response?.status === 400) {
+          throw new Error(error.response.data?.detail || 'Invalid truck data')
+        } else if (error.response?.status === 403) {
+          throw new Error('Permission denied')
+        } else {
+          throw new Error(error.message || 'Failed to update truck')
+        }
       }
     },
 
+    // Delete truck
     async deleteTruck(id) {
       try {
-        // Validate ID
         if (!id || typeof id !== 'string') {
           throw new Error('Invalid truck ID provided for deletion')
         }
         
-        console.log('🗑️ Deleting truck:', id)
+        console.log('🗑️ Deleting truck in Workers:', id)
         await axios.delete(`/api/trucks/${id}`, {
           headers: {
             'Accept': 'application/json'
-          }
+          },
+          timeout: 10000
         })
-        console.log('✅ Truck deleted:', id)
+        
+        console.log('✅ Truck deleted in Workers:', id)
         
         // Remove from local state
         this.trucks = this.trucks.filter(t => t.id !== id)
         
-      } catch (error) {
-        console.error('❌ Failed to delete truck:', error)
+        // Refresh stats in background
+        this.fetchStats().catch(err => 
+          console.warn('Failed to refresh stats after delete:', err)
+        )
         
-        // Provide more specific error messages
+      } catch (error) {
+        console.error('❌ Failed to delete truck in Workers:', error)
+        
         if (error.response?.status === 404) {
           throw new Error('Truck not found - it may have already been deleted')
         } else if (error.response?.status === 403) {
@@ -265,9 +415,9 @@ export const useTruckStore = defineStore('trucks', {
       }
     },
 
+    // Update truck status
     async updateStatus(id, statusType, status) {
       try {
-        // Validate parameters
         if (!id || typeof id !== 'string') {
           throw new Error('Invalid truck ID provided for status update')
         }
@@ -280,29 +430,36 @@ export const useTruckStore = defineStore('trucks', {
           throw new Error('Invalid status value')
         }
         
-        console.log('🔄 Updating status:', { id, statusType, status })
+        console.log('🔄 Updating status in Workers:', { id, statusType, status })
         const response = await axios.patch(`/api/trucks/${id}/status`, null, {
           params: { status_type: statusType, status },
           headers: {
             'Accept': 'application/json'
-          }
+          },
+          timeout: 10000
         })
-        console.log('✅ Status updated:', response.data)
         
-        // Validate and update local state
+        console.log('✅ Status updated in Workers:', response.data)
+        
         if (this.validateTruck(response.data)) {
+          // Update local state
           const index = this.trucks.findIndex(t => t.id === id)
           if (index !== -1) {
             this.trucks[index] = response.data
           }
+          
+          // Refresh stats in background
+          this.fetchStats().catch(err => 
+            console.warn('Failed to refresh stats after status update:', err)
+          )
+          
           return response.data
         } else {
-          throw new Error('Invalid truck data returned from server')
+          throw new Error('Invalid truck data returned from Workers')
         }
       } catch (error) {
-        console.error('❌ Failed to update status:', error)
+        console.error('❌ Failed to update status in Workers:', error)
         
-        // Provide more specific error messages
         if (error.response?.status === 404) {
           throw new Error('Truck not found for status update')
         } else if (error.response?.status === 403) {
@@ -313,98 +470,67 @@ export const useTruckStore = defineStore('trucks', {
       }
     },
 
-    connectWebSocket() {
-      try {
-        // Determine WebSocket URL
-        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-        let wsUrl = import.meta.env.VITE_WS_URL
-        
-        // Fallback WebSocket URL construction
-        if (!wsUrl) {
-          const apiUrl = import.meta.env.VITE_API_BASE_URL || `${wsProtocol}//${window.location.host}`
-          wsUrl = apiUrl.replace(/^https?:/, wsProtocol) + '/ws'
-        }
-        
-        console.log('🔌 Connecting WebSocket to:', wsUrl)
-        this.websocket = new WebSocket(wsUrl)
-
-        this.websocket.onmessage = async (event) => {
-          try {
-            const message = JSON.parse(event.data)
-            console.log('📨 WebSocket message received:', message)
-
-            switch (message.type) {
-              case 'truck_created':
-                if (this.validateTruck(message.data) && this.isWithinDateFilter(message.data.created_at)) {
-                  // Check if truck already exists to avoid duplicates
-                  const existingIndex = this.trucks.findIndex(t => t.id === message.data.id)
-                  if (existingIndex === -1) {
-                    this.trucks.unshift(message.data)
-                    console.log('✅ New truck added to store:', message.data.id)
-                  } else {
-                    console.log('⚠️ Truck already exists, updating:', message.data.id)
-                    this.trucks[existingIndex] = message.data
-                  }
-                  await this.fetchStats()
-                }
-                break
-              case 'truck_updated':
-              case 'status_updated':
-                if (this.validateTruck(message.data)) {
-                  const updateIndex = this.trucks.findIndex(t => t.id === message.data.id)
-                  if (updateIndex !== -1) {
-                    this.trucks[updateIndex] = message.data
-                    console.log('✅ Truck updated in store:', message.data.id)
-                    await this.fetchStats()
-                  }
-                }
-                break
-              case 'truck_deleted':
-                if (message.data && message.data.id) {
-                  this.trucks = this.trucks.filter(t => t.id !== message.data.id)
-                  console.log('✅ Truck removed from store:', message.data.id)
-                  await this.fetchStats()
-                }
-                break
-            }
-          } catch (error) {
-            console.error('❌ WebSocket message processing error:', error)
-          }
-        }
-
-        this.websocket.onerror = (error) => {
-          console.error('❌ WebSocket error:', error)
-        }
-        
-        this.websocket.onopen = () => {
-          console.log('✅ WebSocket connected successfully')
-        }
-        
-        this.websocket.onclose = (event) => {
-          console.log('🔌 WebSocket disconnected:', event.code, event.reason)
-          // Only attempt to reconnect if it wasn't a normal closure
-          if (event.code !== 1000) {
-            setTimeout(() => {
-              if (!this.websocket || this.websocket.readyState === WebSocket.CLOSED) {
-                console.log('🔄 Attempting to reconnect WebSocket...')
-                this.connectWebSocket()
-              }
-            }, 5000) // Increased delay to 5 seconds
-          }
-        }
-      } catch (error) {
-        console.error('❌ WebSocket connection error:', error)
+    // Polling instead of WebSocket for Workers
+    startPolling(intervalMs = 30000) {
+      if (this.isPolling) {
+        console.log('📡 Polling already active')
+        return
       }
+      
+      console.log(`🔄 Starting polling for Workers (${intervalMs}ms interval)`)
+      this.isPolling = true
+      
+      this.pollingInterval = setInterval(async () => {
+        try {
+          console.log('📡 Polling update...')
+          await Promise.all([
+            this.fetchTrucks(),
+            this.fetchStats()
+          ])
+          console.log('📡 Polling update completed')
+        } catch (error) {
+          console.error('❌ Polling error:', error)
+          // Don't stop polling on error, just log it
+        }
+      }, intervalMs)
+    },
+
+    stopPolling() {
+      if (this.pollingInterval) {
+        console.log('⏹️ Stopping polling')
+        clearInterval(this.pollingInterval)
+        this.pollingInterval = null
+        this.isPolling = false
+      }
+    },
+
+    // Compatibility methods for existing components (WebSocket replacement)
+    connectWebSocket() {
+      console.log('🔌 WebSocket not available in Workers, using polling instead')
+      this.startPolling(30000) // Poll every 30 seconds
     },
 
     disconnectWebSocket() {
-      if (this.websocket) {
-        console.log('🔌 Disconnecting WebSocket')
-        this.websocket.close(1000, 'User navigated away') // Normal closure
-        this.websocket = null
+      console.log('🔌 Stopping polling (WebSocket compatibility)')
+      this.stopPolling()
+    },
+
+    // Manual refresh method
+    async refreshData() {
+      try {
+        console.log('🔄 Manual refresh started')
+        await Promise.all([
+          this.fetchTrucks(),
+          this.fetchStats()
+        ])
+        console.log('🔄 Manual refresh completed')
+      } catch (error) {
+        console.error('❌ Manual refresh failed:', error)
+        throw error
       }
     },
 
+    // Check if truck is within date filter
     isWithinDateFilter(dateString) {
       if (!this.dateFilter.fromDate && !this.dateFilter.toDate) return true
 
@@ -436,9 +562,28 @@ export const useTruckStore = defineStore('trucks', {
       }
     },
 
+    // Clear all filters
+    clearFilters() {
+      console.log('🧹 Clearing all filters')
+      this.setDateFilter(null, null)
+    },
+
+    // Search trucks locally (since we can't do complex queries in Workers easily)
+    searchTrucks(searchTerm) {
+      if (!searchTerm) return this.trucks
+      
+      const term = searchTerm.toLowerCase()
+      return this.trucks.filter(truck => 
+        truck.shipping_no?.toLowerCase().includes(term) ||
+        truck.terminal?.toLowerCase().includes(term) ||
+        truck.dock_code?.toLowerCase().includes(term) ||
+        truck.truck_route?.toLowerCase().includes(term)
+      )
+    },
+
     // Debug method to check current state
     debugState() {
-      console.log('🔍 Current store state:', {
+      console.log('🔍 Workers store state:', {
         trucksCount: this.trucks.length,
         validTrucks: this.trucks.filter(t => this.validateTruck(t)).length,
         invalidTrucks: this.trucks.filter(t => !this.validateTruck(t)).length,
@@ -446,7 +591,10 @@ export const useTruckStore = defineStore('trucks', {
         error: this.error,
         dateFilter: this.dateFilter,
         stats: this.stats,
-        websocketState: this.websocket?.readyState,
+        isPolling: this.isPolling,
+        pollingInterval: !!this.pollingInterval,
+        lastPollingUpdate: this.lastPollingUpdate ? new Date(this.lastPollingUpdate).toISOString() : null,
+        isDataStale: this.isDataStale,
         sampleTruckIds: this.trucks.slice(0, 5).map(t => ({ id: t.id, shipping_no: t.shipping_no }))
       })
       
@@ -468,6 +616,98 @@ export const useTruckStore = defineStore('trucks', {
       }
       
       return cleanedCount
+    },
+
+    // Reset store to initial state
+    resetStore() {
+      console.log('🔄 Resetting truck store')
+      this.trucks = []
+      this.resetStats()
+      this.loading = false
+      this.error = null
+      this.setDateFilter(null, null)
+      this.stopPolling()
+      this.lastPollingUpdate = null
+    },
+
+    // Force refresh (bypass cache, stop/start polling)
+    async forceRefresh() {
+      console.log('💪 Force refresh initiated')
+      
+      // Stop polling temporarily
+      this.stopPolling()
+      
+      try {
+        // Clear current data
+        this.trucks = []
+        this.resetStats()
+        this.error = null
+        
+        // Fetch fresh data
+        await this.refreshData()
+        
+        // Restart polling
+        this.startPolling()
+        
+        console.log('💪 Force refresh completed')
+      } catch (error) {
+        console.error('❌ Force refresh failed:', error)
+        
+        // Restart polling even if refresh failed
+        this.startPolling()
+        
+        throw error
+      }
+    },
+
+    // Get truck by shipping number
+    getTruckByShippingNo(shippingNo) {
+      return this.trucks.find(truck => truck.shipping_no === shippingNo)
+    },
+
+    // Get trucks with specific statuses
+    getTrucksByStatus(preparationStatus = null, loadingStatus = null) {
+      return this.trucks.filter(truck => {
+        const prepMatch = !preparationStatus || truck.status_preparation === preparationStatus
+        const loadMatch = !loadingStatus || truck.status_loading === loadingStatus
+        return prepMatch && loadMatch
+      })
+    },
+
+    // Bulk update statuses (for selected trucks)
+    async bulkUpdateStatus(truckIds, statusType, status) {
+      if (!Array.isArray(truckIds) || truckIds.length === 0) {
+        throw new Error('No trucks selected for bulk update')
+      }
+
+      console.log(`🔄 Bulk updating ${truckIds.length} trucks:`, { statusType, status })
+      
+      const results = []
+      const errors = []
+
+      // Update trucks one by one (Workers doesn't support batch operations easily)
+      for (const id of truckIds) {
+        try {
+          const result = await this.updateStatus(id, statusType, status)
+          results.push(result)
+        } catch (error) {
+          console.error(`❌ Failed to update truck ${id}:`, error)
+          errors.push({ id, error: error.message })
+        }
+      }
+
+      console.log(`✅ Bulk update completed: ${results.length} success, ${errors.length} errors`)
+      
+      if (errors.length > 0) {
+        console.warn('⚠️ Bulk update errors:', errors)
+      }
+
+      return {
+        success: results.length,
+        errors: errors.length,
+        results,
+        errorDetails: errors
+      }
     }
   }
 })

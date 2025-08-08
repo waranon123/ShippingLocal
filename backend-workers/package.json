@@ -1,0 +1,28 @@
+{
+  "name": "truck-management-backend-workers",
+  "version": "1.0.0",
+  "description": "Truck Management Backend on Cloudflare Workers",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --env development",
+    "deploy": "wrangler deploy --env production",
+    "deploy:dev": "wrangler deploy --env development",
+    "db:create": "wrangler d1 create truck-management",
+    "db:create:dev": "wrangler d1 create truck-management-dev",
+    "db:create:prod": "wrangler d1 create truck-management-prod",
+    "db:setup": "wrangler d1 execute truck-management --env development --file=./schema.sql",
+    "db:setup:prod": "wrangler d1 execute truck-management-prod --env production --file=./schema.sql",
+    "db:local": "wrangler d1 execute truck-management --local --file=./schema.sql",
+    "logs": "wrangler tail",
+    "test": "wrangler dev --test"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "hono": "^4.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.8.0",
+    "wrangler": "^4.28.1"
+  }
+}

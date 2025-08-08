@@ -1,0 +1,5 @@
+# Redirects for Vue.js SPA
+/*    /index.html   200
+
+# Optional: API Proxy (ถ้าต้องการใช้ same-origin requests)
+# /api/*  https://truck-management-backend.your-subdomain.workers.dev/api/:splat  200

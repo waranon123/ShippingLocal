@@ -1,0 +1,43 @@
+name = "truck-management-backend"
+main = "src/index.js"
+compatibility_date = "2023-10-30"
+compatibility_flags = ["nodejs_compat"]
+
+# Default environment variables
+[vars]
+JWT_SECRET = "truck-system-cloudflare-secret-key-2024-super-secure"
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRATION_MINUTES = "60"
+ENVIRONMENT = "development"
+
+# Default D1 Database (development)
+[[d1_databases]]
+binding = "DB"
+database_name = "truck-management-dev"
+database_id = "dbd3ada8-6e48-4b6f-9e67-c28b4b21e403"
+
+# Development environment
+[env.development]
+[env.development.vars]
+JWT_SECRET = "b8edeebf-9c97-412d-843a-bc8612b74873"
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRATION_MINUTES = "60"
+ENVIRONMENT = "development"
+
+[[env.development.d1_databases]]
+binding = "DB"
+database_name = "truck-management-dev"
+database_id = "dbd3ada8-6e48-4b6f-9e67-c28b4b21e403"
+
+# Production environment  
+[env.production]
+[env.production.vars]
+JWT_SECRET = "production-super-secure-secret-key-change-this"
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRATION_MINUTES = "60"
+ENVIRONMENT = "production"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "truck-management-prod"
+database_id = "25c0f381-4630-404d-8416-a7d8ab7c5abc"

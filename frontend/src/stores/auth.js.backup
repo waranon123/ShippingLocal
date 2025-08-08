@@ -1,3 +1,5 @@
+// frontend/src/stores/auth.js - Fixed unsafe headers
+
 import { defineStore } from 'pinia'
 import axios from 'axios'
 
@@ -27,10 +29,18 @@ console.log('🔗 API Base URL:', API_BASE_URL)
 axios.defaults.baseURL = API_BASE_URL
 axios.defaults.timeout = 10000
 
-// Add request interceptor for debugging
+// Add request interceptor for debugging (removed unsafe headers)
 axios.interceptors.request.use(
   (config) => {
     console.log('📤 API Request:', config.method?.toUpperCase(), config.url)
+    
+    // Only add safe headers that browsers allow
+    config.headers['Accept'] = 'application/json'
+    config.headers['Content-Type'] = config.headers['Content-Type'] || 'application/json'
+    
+    // For ngrok, we can only use certain headers
+    // These headers should be set by the server/backend, not the client
+    
     return config
   },
   (error) => {
@@ -107,19 +117,6 @@ export const useAuthStore = defineStore('auth', {
       }
     },
     
-    async fetchUser() {
-      try {
-        const response = await axios.get('/api/auth/me')
-        this.user = response.data
-        this.role = response.data.role
-        localStorage.setItem('role', response.data.role)
-        console.log('✅ User data fetched:', this.user)
-      } catch (error) {
-        console.error('❌ Failed to fetch user:', error)
-        this.logout() 
-      }
-    },
-    
     logout() {
       this.token = null
       this.user = null
@@ -128,6 +125,86 @@ export const useAuthStore = defineStore('auth', {
       localStorage.removeItem('role')
       delete axios.defaults.headers.common['Authorization']
       console.log('🚪 Logged out')
+    },
+    
+    async fetchUser() {
+      try {
+        const response = await axios.get('/api/auth/me')
+        this.user = response.data
+        this.role = response.data.role
+        localStorage.setItem('role', response.data.role)
+        console.log('✅ User data fetched:', this.user)
+      } catch (error) {
+        console.log('⚠️ /api/auth/me not available, using fallback')
+        // Don't logout if endpoint doesn't exist, create fallback user
+        if (this.role) {
+          this.user = {
+            id: 'fallback',
+            username: this.role === 'admin' ? 'Admin' : 'User',
+            role: this.role
+          }
+          console.log('✅ Using fallback user data:', this.user)
+        } else if (error.response?.status === 401) {
+          console.error('❌ Unauthorized, logging out')
+          this.logout()
+        }
+      }
+    },
+    
+    async guestLogin() {
+      try {
+        console.log('🔑 Attempting guest login...')
+        
+        const response = await axios.post('/api/auth/guest-login', {})
+        
+        const { access_token, role } = response.data
+        
+        this.token = access_token
+        this.role = role || 'viewer'
+        this.user = { id: 'guest', username: 'Guest Viewer', role: 'viewer' }
+        
+        localStorage.setItem('token', access_token)
+        localStorage.setItem('role', this.role)
+        
+        axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`
+        
+        console.log('✅ Guest login successful')
+        return true
+      } catch (error) {
+        console.error('❌ Guest login failed:', error)
+        return false
+      }
+    },
+    
+    async registerUser(username, password, role = 'user') {
+      try {
+        console.log('👤 Attempting to register user:', username)
+        
+        const response = await axios.post('/api/auth/register', {
+          username,
+          password,
+          role
+        })
+        
+        console.log('✅ User registered successfully:', response.data)
+        return { success: true, data: response.data }
+      } catch (error) {
+        console.error('❌ User registration failed:', error)
+        return { 
+          success: false, 
+          error: error.response?.data?.detail || 'Registration failed' 
+        }
+      }
+    },
+
+    // Initialize auth state
+    async checkAuth() {
+      if (this.token) {
+        axios.defaults.headers.common['Authorization'] = `Bearer ${this.token}`
+        await this.fetchUser()
+        return true
+      }
+      return false
     }
   }
 })

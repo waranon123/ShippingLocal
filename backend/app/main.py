@@ -20,6 +20,10 @@ from calendar import monthrange
 from datetime import datetime, date
 from .models import Truck, User, create_tables, get_db
 from .schemas import TruckCreate, TruckUpdate, Token, UserResponse, Truck as TruckSchema
+from fastapi.middleware.cors import CORSMiddleware
+
+
+
 
 # Load environment variables
 load_dotenv()
@@ -44,6 +48,44 @@ app.add_middleware(
         "https://*.localhost.run",   # Alternative tunnel
         "*"  # Allow all for development (remove in production)
     ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+def get_cors_origins():
+    """Get CORS origins based on environment"""
+    frontend_url = os.getenv("FRONTEND_URL", "")
+    
+    if os.getenv("ENVIRONMENT") == "production":
+        # Production origins
+        origins = [
+            frontend_url,
+            "https://*.pages.dev",
+            "https://*.cloudflare.com"
+        ]
+        if frontend_url:
+            origins.append(frontend_url)
+    else:
+        # Development origins
+        origins = [
+            "http://localhost:3000",
+            "http://localhost:5173", 
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:5173",
+            "https://*.vercel.app",
+            "https://*.ngrok-free.app",
+            "https://*.ngrok.io",
+            "https://*.loca.lt",
+            "https://*.localhost.run",
+            "*"  # Remove in production
+        ]
+    
+    return origins
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=get_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
