@@ -1,7 +1,0 @@
-name = "truck-management-frontend"
-compatibility_date = "2023-10-30"
-
-[env.production.vars]
-VITE_API_BASE_URL = "https://your-backend.railway.app"
-VITE_WS_URL = "wss://your-backend.railway.app/ws"
-VITE_ENVIRONMENT = "production"

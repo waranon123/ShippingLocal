@@ -1,4 +1,4 @@
-// frontend/src/stores/trucks.js - Complete version for Cloudflare Workers
+// frontend/src/stores/trucks.js - Complete version with bulk operations
 import { defineStore } from 'pinia'
 import axios from 'axios'
 
@@ -58,27 +58,77 @@ export const useTruckStore = defineStore('trucks', {
   actions: {
     // Validate truck data
     validateTruck(truck) {
-      if (!truck || typeof truck !== 'object') {
-        console.warn('⚠️ Invalid truck object:', truck)
-        return false
+  // Debug: log ข้อมูลที่เข้ามา
+  if (!truck || typeof truck !== 'object') {
+    console.warn('⚠️ Invalid truck object (not object):', truck)
+    return false
+  }
+  
+  if (!truck.id) {
+    console.warn('⚠️ Truck missing ID:', truck)
+    // ถ้าไม่มี ID ให้สร้างใหม่
+    truck.id = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+    console.log('✅ Generated temporary ID:', truck.id)
+  }
+  
+  // ตรวจสอบ required fields แบบ flexible มากขึ้น
+  const requiredFields = ['terminal', 'shipping_no', 'dock_code', 'truck_route']
+  const missingFields = []
+  
+  for (const field of requiredFields) {
+    if (!truck[field] || truck[field] === null || truck[field] === undefined || truck[field] === '') {
+      missingFields.push(field)
+    }
+  }
+  
+  if (missingFields.length > 0) {
+    console.warn(`⚠️ Truck ${truck.id} missing required fields:`, missingFields, truck)
+    
+    // แทนที่จะ reject ให้ใช้ค่า default
+    missingFields.forEach(field => {
+      switch(field) {
+        case 'terminal':
+          truck.terminal = 'Unknown'
+          break
+        case 'shipping_no':
+          truck.shipping_no = `SHP-${truck.id?.substring(0, 8) || 'UNKNOWN'}`
+          break
+        case 'dock_code':
+          truck.dock_code = 'DOCK-??'
+          break
+        case 'truck_route':
+          truck.truck_route = 'Unknown Route'
+          break
       }
-      
-      if (!truck.id || typeof truck.id !== 'string') {
-        console.warn('⚠️ Truck missing valid ID:', truck)
-        return false
+    })
+    
+    console.log('✅ Fixed missing fields with defaults:', truck)
+  }
+  
+  // ตรวจสอบและแก้ไข optional fields
+  const optionalFields = [
+    'preparation_start', 'preparation_end', 
+    'loading_start', 'loading_end',
+    'status_preparation', 'status_loading',
+    'created_at', 'updated_at'
+  ]
+  
+  optionalFields.forEach(field => {
+    if (truck[field] === null || truck[field] === undefined) {
+      if (field.includes('status')) {
+        truck[field] = 'On Process'
+      } else if (field.includes('_at')) {
+        truck[field] = new Date().toISOString()
+      } else {
+        truck[field] = ''
       }
-      
-      // Check required fields
-      const requiredFields = ['terminal', 'shipping_no', 'dock_code', 'truck_route']
-      for (const field of requiredFields) {
-        if (!truck[field]) {
-          console.warn(`⚠️ Truck missing required field: ${field}`, truck)
-          return false
-        }
-      }
-      
-      return true
-    },
+    }
+  })
+  
+  // Debug: log successful validation
+  console.log('✅ Truck validated successfully:', truck.id, truck.shipping_no)
+  return true
+},
 
     // Fetch trucks with filters
     async fetchTrucks(filters = {}) {
@@ -470,6 +520,130 @@ export const useTruckStore = defineStore('trucks', {
       }
     },
 
+    // Bulk delete trucks method
+    async bulkDeleteTrucks(truckIds) {
+  if (!Array.isArray(truckIds) || truckIds.length === 0) {
+    throw new Error('No trucks selected for bulk delete')
+  }
+
+  // ✅ FIX: Validate truck IDs before processing
+  const validIds = truckIds.filter(id => {
+    if (!id || typeof id !== 'string' || id.trim() === '') {
+      console.warn('⚠️ Invalid truck ID detected:', id, typeof id)
+      return false
+    }
+    return true
+  })
+  
+  if (validIds.length === 0) {
+    throw new Error('No valid truck IDs provided for deletion')
+  }
+  
+  if (validIds.length !== truckIds.length) {
+    console.warn(`⚠️ ${truckIds.length - validIds.length} invalid IDs filtered out`)
+  }
+
+  console.log(`🗑️ Bulk deleting ${validIds.length} trucks with valid IDs...`)
+  
+  const results = []
+  const errors = []
+
+  // ลบทีละตัวเพราะ Workers ไม่รองรับ batch delete
+  for (const id of validIds) {
+    try {
+      console.log(`🗑️ Attempting to delete truck ID: ${id}`)
+      await this.deleteTruck(id)
+      results.push({ id, success: true })
+      console.log(`✅ Deleted truck: ${id}`)
+    } catch (error) {
+      console.error(`❌ Failed to delete truck ${id}:`, error)
+      const truck = this.trucks.find(t => t.id === id)
+      errors.push({ 
+        id, 
+        error: error.message,
+        shipping_no: truck?.shipping_no || 'Unknown'
+      })
+    }
+  }
+
+  console.log(`🗑️ Bulk delete completed: ${results.length} success, ${errors.length} errors`)
+  
+  // Refresh stats after bulk delete
+  if (results.length > 0) {
+    try {
+      await this.fetchStats()
+    } catch (statsError) {
+      console.warn('Failed to refresh stats after bulk delete:', statsError)
+    }
+  }
+
+  return {
+    success: results.length,
+    errors: errors.length,
+    results,
+    errorDetails: errors
+  }
+},
+
+    // Bulk update status method
+    async bulkUpdateStatus(truckIds, statusType, status) {
+      if (!Array.isArray(truckIds) || truckIds.length === 0) {
+        throw new Error('No trucks selected for bulk update')
+      }
+
+      if (!['preparation', 'loading'].includes(statusType)) {
+        throw new Error('Invalid status type. Must be "preparation" or "loading"')
+      }
+
+      if (!['On Process', 'Delay', 'Finished'].includes(status)) {
+        throw new Error('Invalid status value')
+      }
+
+      console.log(`🔄 Bulk updating ${truckIds.length} trucks:`, { statusType, status })
+      
+      const results = []
+      const errors = []
+
+      // อัพเดททีละตัว
+      for (const id of truckIds) {
+        try {
+          const result = await this.updateStatus(id, statusType, status)
+          results.push(result)
+          console.log(`✅ Updated truck status: ${id}`)
+        } catch (error) {
+          console.error(`❌ Failed to update truck ${id}:`, error)
+          const truck = this.trucks.find(t => t.id === id)
+          errors.push({ 
+            id, 
+            error: error.message,
+            shipping_no: truck?.shipping_no || 'Unknown'
+          })
+        }
+      }
+
+      console.log(`🔄 Bulk status update completed: ${results.length} success, ${errors.length} errors`)
+      
+      // Refresh stats after bulk update
+      if (results.length > 0) {
+        try {
+          await this.fetchStats()
+        } catch (statsError) {
+          console.warn('Failed to refresh stats after bulk update:', statsError)
+        }
+      }
+
+      if (errors.length > 0) {
+        console.warn('⚠️ Bulk update errors:', errors)
+      }
+
+      return {
+        success: results.length,
+        errors: errors.length,
+        results,
+        errorDetails: errors
+      }
+    },
+
     // Polling instead of WebSocket for Workers
     startPolling(intervalMs = 30000) {
       if (this.isPolling) {
@@ -672,42 +846,6 @@ export const useTruckStore = defineStore('trucks', {
         const loadMatch = !loadingStatus || truck.status_loading === loadingStatus
         return prepMatch && loadMatch
       })
-    },
-
-    // Bulk update statuses (for selected trucks)
-    async bulkUpdateStatus(truckIds, statusType, status) {
-      if (!Array.isArray(truckIds) || truckIds.length === 0) {
-        throw new Error('No trucks selected for bulk update')
-      }
-
-      console.log(`🔄 Bulk updating ${truckIds.length} trucks:`, { statusType, status })
-      
-      const results = []
-      const errors = []
-
-      // Update trucks one by one (Workers doesn't support batch operations easily)
-      for (const id of truckIds) {
-        try {
-          const result = await this.updateStatus(id, statusType, status)
-          results.push(result)
-        } catch (error) {
-          console.error(`❌ Failed to update truck ${id}:`, error)
-          errors.push({ id, error: error.message })
-        }
-      }
-
-      console.log(`✅ Bulk update completed: ${results.length} success, ${errors.length} errors`)
-      
-      if (errors.length > 0) {
-        console.warn('⚠️ Bulk update errors:', errors)
-      }
-
-      return {
-        success: results.length,
-        errors: errors.length,
-        results,
-        errorDetails: errors
-      }
     }
   }
 })

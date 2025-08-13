@@ -38,7 +38,7 @@
               <v-card variant="outlined" class="mb-3 pa-3">
                 <v-card-subtitle class="text-caption">Demo Credentials:</v-card-subtitle>
                 <div class="text-body-2">
-                  <strong>Admin:</strong> admin / admin123<br>
+                 
                   <strong>User:</strong> user / user123<br>
                 </div>
               </v-card>
@@ -175,8 +175,8 @@ const isAddUserMode = ref(false)
 
 // Login data
 const loginData = ref({
-  username: 'admin',
-  password: 'admin123'
+  username: '',
+  password: ''
 })
 
 // New user data

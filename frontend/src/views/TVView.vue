@@ -80,7 +80,7 @@ import { useTruckStore } from '@/stores/trucks'
 const truckStore = useTruckStore()
 const currentSlide = ref(0)
 const showError = ref(false)
-const itemsPerPage = 10
+const itemsPerPage = 5
 
 const trucks = computed(() => truckStore.trucks)
 const terminalPages = computed(() => {

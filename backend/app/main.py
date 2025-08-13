@@ -691,7 +691,6 @@ async def get_trucks(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-// Python version - แก้ไข backend/app/main.py template endpoint
 @app.get("/api/trucks/template")
 async def download_import_template():
     template_data = {
