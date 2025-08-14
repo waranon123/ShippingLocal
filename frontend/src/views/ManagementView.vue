@@ -686,15 +686,15 @@ const downloadTemplate = async () => {
       responseType: 'blob',
       headers: {
         'Authorization': `Bearer ${authStore.token}`,
-        'Content-Type': 'application/json'
+        'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       },
       timeout: 30000
     }
 
     const response = await $http.get('/api/trucks/template', config)
 
-    const contentType = response.headers['content-type'] || 'text/csv'
-    const filename = 'truck_monthly_template.csv'
+    const contentType = response.headers['content-type'] || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    const filename = 'truck_monthly_template.xlsx'
     const blob = new Blob([response.data], { type: contentType })
     saveAs(blob, filename)
 

@@ -346,20 +346,25 @@ frontend/src/components/ExcelImport.vue - Updated to reflect new duplicate rules
                     </v-expansion-panel>
                   </v-expansion-panels>
                 </div>
-
-                <!-- ✅ NEW: Import rules reminder -->
-                <v-alert type="info" class="mt-4">
-                  <div class="text-subtitle-1 mb-2">
-                    <v-icon class="mr-1">mdi-lightbulb-on</v-icon>
-                    Import Rules Applied:
-                  </div>
-                  <ul class="text-body-2">
-                    <li><strong>Duplicates Allowed:</strong> Same dock codes, terminals, etc. can exist in different records</li>
-                    <li><strong>Smart Updates:</strong> Only exact matches (Date + Terminal + Shipping No + Dock Code + Route) were updated</li>
-                    <li><strong>New Records:</strong> All other combinations created new entries</li>
+                <!-- ✅ UPDATED: New import rules explanation -->
+                <v-alert type="success" class="mb-4">
+                  <div class="text-subtitle-1 mb-2">📅 Smart Import Rules:</div>
+                  <ul>
+                    <li><strong>Duplicates Allowed:</strong> Same dock codes, terminals can exist in different records</li>
+                    <li><strong>Update Condition:</strong> Updates ONLY when ALL 5 fields match exactly:
+                      <ol class="ml-4 mt-1">
+                        <li>Date (same day)</li>
+                        <li>Terminal</li>
+                        <li>Shipping No</li>
+                        <li>Dock Code</li>
+                        <li>Truck Route</li>
+                      </ol>
+                    </li>
+                    <li><strong>New Record:</strong> Creates new if ANY field is different</li>
+                    <li><strong>Monthly Processing:</strong> Each row creates daily records for the entire month</li>
+                    <li><strong>Example:</strong> "2024-01" creates 31 records (Jan 1-31, 2024)</li>
                   </ul>
                 </v-alert>
-
                 <!-- ✅ UPDATED: Better troubleshooting tips -->
                 <v-alert v-if="importResult.failed > 0" type="warning" class="mt-4">
                   <div class="text-subtitle-1 mb-2">

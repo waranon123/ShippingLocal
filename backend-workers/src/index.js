@@ -1130,6 +1130,7 @@ app.post('/api/trucks/import/preview', createAuthMiddleware('user'), async (c) =
 })
 
 // Confirm Excel import (ensure time fields are preserved)
+// Confirm Excel import (ensure time fields are preserved)
 app.post('/api/trucks/import/confirm', createAuthMiddleware('user'), async (c) => {
   try {
     const { session_id } = await c.req.json()
@@ -1150,6 +1151,8 @@ app.post('/api/trucks/import/confirm', createAuthMiddleware('user'), async (c) =
 
     const truckTemplates = session.truck_templates
     let importedCount = 0
+    let updatedCount = 0
+    let createdCount = 0
     const failedImports = []
 
     for (const [templateIndex, truckTemplate] of truckTemplates.entries()) {
@@ -1157,25 +1160,34 @@ app.post('/api/trucks/import/confirm', createAuthMiddleware('user'), async (c) =
         const year = truckTemplate.year
         const month = truckTemplate.month
         const daysInMonth = new Date(year, month, 0).getDate()
-        const baseShippingNo = truckTemplate.shipping_no
 
         for (let day = 1; day <= daysInMonth; day++) {
           try {
             const recordDate = new Date(year, month - 1, day).toISOString().split('T')[0]
             
-            // Check for existing record
+            // ✅ NEW: Check for existing record with ALL matching fields
+            // Only update if ALL these fields match: Date + Terminal + Shipping No + Dock Code + Route
             const existing = await db.prepare(`
               SELECT id FROM trucks 
-              WHERE shipping_no = ? AND DATE(created_at) = ?
-            `).bind(baseShippingNo, recordDate).first()
+              WHERE DATE(created_at) = ? 
+                AND terminal = ? 
+                AND shipping_no = ? 
+                AND dock_code = ? 
+                AND truck_route = ?
+            `).bind(
+              recordDate,
+              truckTemplate.terminal,
+              truckTemplate.shipping_no,
+              truckTemplate.dock_code,
+              truckTemplate.truck_route
+            ).first()
 
             const truckData = {
               id: existing ? existing.id : generateId(),
               terminal: truckTemplate.terminal,
-              shipping_no: baseShippingNo,
+              shipping_no: truckTemplate.shipping_no,
               dock_code: truckTemplate.dock_code,
               truck_route: truckTemplate.truck_route,
-              // *** FIX: Ensure time fields are properly saved ***
               preparation_start: truckTemplate.preparation_start || null,
               preparation_end: truckTemplate.preparation_end || null,
               loading_start: truckTemplate.loading_start || null,
@@ -1186,22 +1198,19 @@ app.post('/api/trucks/import/confirm', createAuthMiddleware('user'), async (c) =
               updated_at: getCurrentTimestamp()
             }
 
-            console.log(`📝 Saving truck data for ${recordDate}:`, {
+            console.log(`📝 Processing truck data for ${recordDate}:`, {
+              date: recordDate,
+              terminal: truckData.terminal,
               shipping_no: truckData.shipping_no,
-              preparation_start: truckData.preparation_start,
-              preparation_end: truckData.preparation_end,
-              loading_start: truckData.loading_start,
-              loading_end: truckData.loading_end
+              dock_code: truckData.dock_code,
+              truck_route: truckData.truck_route,
+              existing: !!existing
             })
 
             if (existing) {
-              // Update existing record with all fields including times
+              // ✅ UPDATE: Only when ALL fields match (Date, Terminal, Shipping No, Dock Code, Route)
               await db.prepare(`
                 UPDATE trucks SET 
-                  terminal = ?, 
-                  shipping_no = ?, 
-                  dock_code = ?, 
-                  truck_route = ?,
                   preparation_start = ?, 
                   preparation_end = ?, 
                   loading_start = ?, 
@@ -1211,10 +1220,6 @@ app.post('/api/trucks/import/confirm', createAuthMiddleware('user'), async (c) =
                   updated_at = ?
                 WHERE id = ?
               `).bind(
-                truckData.terminal,
-                truckData.shipping_no,
-                truckData.dock_code,
-                truckData.truck_route,
                 truckData.preparation_start,
                 truckData.preparation_end,
                 truckData.loading_start,
@@ -1225,9 +1230,10 @@ app.post('/api/trucks/import/confirm', createAuthMiddleware('user'), async (c) =
                 existing.id
               ).run()
               
-              console.log(`✅ Updated existing truck: ${existing.id}`)
+              console.log(`✅ Updated existing truck (all fields matched): ${existing.id}`)
+              updatedCount++
             } else {
-              // Create new record with all fields including times
+              // ✅ CREATE: New record when any field is different
               await db.prepare(`
                 INSERT INTO trucks (
                   id, terminal, shipping_no, dock_code, truck_route,
@@ -1250,7 +1256,8 @@ app.post('/api/trucks/import/confirm', createAuthMiddleware('user'), async (c) =
                 truckData.updated_at
               ).run()
               
-              console.log(`✅ Created new truck: ${truckData.id}`)
+              console.log(`✅ Created new truck (unique combination): ${truckData.id}`)
+              createdCount++
             }
 
             importedCount++
@@ -1259,7 +1266,8 @@ app.post('/api/trucks/import/confirm', createAuthMiddleware('user'), async (c) =
             failedImports.push({
               template: templateIndex + 1,
               day,
-              shipping_no: baseShippingNo,
+              shipping_no: truckTemplate.shipping_no,
+              dock_code: truckTemplate.dock_code,
               error: dayError.message
             })
             console.error(`❌ Failed to import day ${day}:`, dayError)
@@ -1269,6 +1277,7 @@ app.post('/api/trucks/import/confirm', createAuthMiddleware('user'), async (c) =
         failedImports.push({
           template: templateIndex + 1,
           shipping_no: truckTemplate.shipping_no || 'Unknown',
+          dock_code: truckTemplate.dock_code || 'Unknown',
           error: templateError.message
         })
         console.error(`❌ Failed to import template ${templateIndex + 1}:`, templateError)
@@ -1278,12 +1287,16 @@ app.post('/api/trucks/import/confirm', createAuthMiddleware('user'), async (c) =
     // Clean up session
     delete importSessions[session_id]
 
+    console.log(`📊 Import Summary: Total=${importedCount}, Updated=${updatedCount}, Created=${createdCount}, Failed=${failedImports.length}`)
+
     return c.json({
       success: true,
       imported: importedCount,
+      updated: updatedCount,
+      created: createdCount,
       failed: failedImports.length,
       failed_details: failedImports,
-      message: `Successfully imported ${importedCount} daily records from monthly templates`
+      message: `Successfully processed ${importedCount} records (${createdCount} new, ${updatedCount} updated)`
     })
 
   } catch (error) {
