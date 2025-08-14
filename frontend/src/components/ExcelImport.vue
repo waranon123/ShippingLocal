@@ -78,12 +78,21 @@ frontend/src/components/ExcelImport.vue - Updated to reflect new duplicate rules
 
                 <v-divider class="my-4"></v-divider>
 
-                <!-- ✅ UPDATED: New import rules explanation -->
+               <!-- ✅ UPDATED: New import rules explanation -->
                 <v-alert type="success" class="mb-4">
-                  <div class="text-subtitle-1 mb-2">📅 Flexible Monthly Import:</div>
+                  <div class="text-subtitle-1 mb-2">📅 Smart Import Rules:</div>
                   <ul>
-                    <li><strong>Duplicates Allowed:</strong> Dock codes, terminals, and other data can be duplicated</li>
-                    <li><strong>Smart Updates:</strong> Only updates if ALL match: Date + Terminal + Shipping No + Dock Code + Route</li>
+                    <li><strong>Duplicates Allowed:</strong> Same dock codes, terminals can exist in different records</li>
+                    <li><strong>Update Condition:</strong> Updates ONLY when ALL 5 fields match exactly:
+                      <ol class="ml-4 mt-1">
+                        <li>Date (same day)</li>
+                        <li>Terminal</li>
+                        <li>Shipping No</li>
+                        <li>Dock Code</li>
+                        <li>Truck Route</li>
+                      </ol>
+                    </li>
+                    <li><strong>New Record:</strong> Creates new if ANY field is different</li>
                     <li><strong>Monthly Processing:</strong> Each row creates daily records for the entire month</li>
                     <li><strong>Example:</strong> "2024-01" creates 31 records (Jan 1-31, 2024)</li>
                   </ul>

@@ -337,13 +337,13 @@
             </v-col>
             <v-col cols="6" md="3">
               <v-card variant="outlined" class="text-center pa-2">
-                <div class="text-h6 font-weight-bold text-blue">{{ prepOnProcessCount }}</div>
+                <div class="text-h6 font-weight-bold" style="color: #FFC107;">{{ prepOnProcessCount }}</div>
                 <div class="text-caption">Prep On Process</div>
               </v-card>
             </v-col>
             <v-col cols="6" md="3">
               <v-card variant="outlined" class="text-center pa-2">
-                <div class="text-h6 font-weight-bold text-orange">{{ prepDelayCount }}</div>
+                <div class="text-h6 font-weight-bold text-red">{{ prepDelayCount }}</div>
                 <div class="text-caption">Prep Delayed</div>
               </v-card>
             </v-col>
@@ -760,9 +760,9 @@ const getShippingInfo = (shippingNo) => {
 
 const getStatusColor = (status) => {
   switch (status) {
-    case 'On Process': return 'blue'
-    case 'Delay': return 'orange'
-    case 'Finished': return 'green'
+    case 'On Process': return 'yellow-darken-1'  // Yellow
+    case 'Delay': return 'red'                   // Red
+    case 'Finished': return 'green'              // Green
     default: return 'grey'
   }
 }

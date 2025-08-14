@@ -10,10 +10,10 @@
         </v-card>
       </v-col>
 
-      <v-col cols="12" md="6" lg="3">
+        <v-col cols="12" md="6" lg="3">
         <v-card class="elevation-2 rounded-lg pa-4">
           <v-card-text class="text-center">
-            <div class="text-h2 font-weight-bold blue--text">{{ stats.preparation_stats['On Process'] || 0 }}</div>
+            <div class="text-h2 font-weight-bold" style="color: #FFC107;">{{ stats.preparation_stats['On Process'] || 0 }}</div>
             <div class="text-h6 mt-2">Preparation In Progress</div>
           </v-card-text>
         </v-card>
@@ -22,7 +22,7 @@
       <v-col cols="12" md="6" lg="3">
         <v-card class="elevation-2 rounded-lg pa-4">
           <v-card-text class="text-center">
-            <div class="text-h2 font-weight-bold orange--text">{{ stats.preparation_stats['Delay'] || 0 }}</div>
+            <div class="text-h2 font-weight-bold text-red">{{ stats.preparation_stats['Delay'] || 0 }}</div>
             <div class="text-h6 mt-2">Preparation Delayed</div>
           </v-card-text>
         </v-card>

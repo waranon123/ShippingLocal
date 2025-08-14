@@ -15,7 +15,7 @@ export default createVuetify({
       mdi,
     },
   },
-  theme: {
+ theme: {
     defaultTheme: 'light',
     themes: {
       light: {
@@ -26,9 +26,9 @@ export default createVuetify({
           warning: '#FF9800',
           error: '#F44336',
           info: '#2196F3',
-          onprocess: '#2196F3',
-          delay: '#FF9800',
-          finished: '#4CAF50'
+          onprocess: '#FFC107',  // Yellow for On Process
+          delay: '#F44336',      // Red for Delay
+          finished: '#4CAF50'    // Green for Finished
         }
       }
     }

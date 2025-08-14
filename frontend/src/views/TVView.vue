@@ -119,9 +119,9 @@ const terminalPages = computed(() => {
 
 const getStatusColor = (status) => {
   switch (status) {
-    case 'On Process': return 'amber'
-    case 'Delay': return 'red'
-    case 'Finished': return 'green'
+    case 'On Process': return 'yellow-darken-1'  // Yellow
+    case 'Delay': return 'red'                   // Red
+    case 'Finished': return 'green'              // Green
     default: return 'grey'
   }
 }
