@@ -759,7 +759,7 @@ const downloadTemplateAlternative = async () => {
   ].join('\n')
 
   const blob = new Blob([csvContent], { type: 'text/csv' })
-  saveAs(blob, 'truck_monthly_template.csv')
+  saveAs(blob, 'truck_monthly_template.xlsx')
 
   snackbarStore.success('✅ Template created locally and downloaded')
 }

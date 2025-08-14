@@ -1,5 +1,6 @@
-// frontend/src/components/ExcelImport.vue - Updated for monthly import
-
+<!-- 
+frontend/src/components/ExcelImport.vue - Updated to reflect new duplicate rules
+-->
 <template>
   <v-dialog v-model="dialog" max-width="800px">
     <template v-slot:activator="{ props }">
@@ -77,14 +78,51 @@
 
                 <v-divider class="my-4"></v-divider>
 
-                <v-alert type="warning" class="mb-4">
-                  <div class="text-subtitle-1 mb-2">📅 Monthly Import Feature:</div>
+                <!-- ✅ UPDATED: New import rules explanation -->
+                <v-alert type="success" class="mb-4">
+                  <div class="text-subtitle-1 mb-2">📅 Flexible Monthly Import:</div>
                   <ul>
-                    <li>Each row will create daily records for the entire month</li>
-                    <li>Example: "2024-01" creates 31 records (Jan 1-31, 2024)</li>
-                    <li>Shipping No will be auto-suffixed with date (SHP001_20240101, SHP001_20240102, etc.)</li>
+                    <li><strong>Duplicates Allowed:</strong> Dock codes, terminals, and other data can be duplicated</li>
+                    <li><strong>Smart Updates:</strong> Only updates if ALL match: Date + Terminal + Shipping No + Dock Code + Route</li>
+                    <li><strong>Monthly Processing:</strong> Each row creates daily records for the entire month</li>
+                    <li><strong>Example:</strong> "2024-01" creates 31 records (Jan 1-31, 2024)</li>
                   </ul>
                 </v-alert>
+
+                <!-- ✅ UPDATED: Update conditions explanation -->
+                <v-expansion-panels class="mb-4">
+                  <v-expansion-panel>
+                    <v-expansion-panel-title>
+                      <v-icon class="mr-2">mdi-information</v-icon>
+                      When will data be updated vs. created new?
+                    </v-expansion-panel-title>
+                    <v-expansion-panel-text>
+                      <div class="text-body-2">
+                        <v-alert type="warning" density="compact" class="mb-3">
+                          <strong>Update Conditions (ALL must match):</strong>
+                        </v-alert>
+                        <ol>
+                          <li><strong>Same Date:</strong> Same day of the month</li>
+                          <li><strong>Same Terminal:</strong> Exact terminal match</li>
+                          <li><strong>Same Shipping No:</strong> Exact shipping number</li>
+                          <li><strong>Same Dock Code:</strong> Exact dock code</li>
+                          <li><strong>Same Route:</strong> Exact truck route</li>
+                        </ol>
+                        
+                        <v-alert type="success" density="compact" class="mt-3">
+                          <strong>If ANY field is different → Creates NEW record</strong>
+                        </v-alert>
+                        
+                        <div class="text-caption mt-2">
+                          <strong>Examples:</strong><br>
+                          ✅ Update: 2024-01-15, Terminal A, SHP001, DOCK-01, Route ABC → Updates times/status<br>
+                          ➕ New: 2024-01-15, Terminal A, SHP001, DOCK-02, Route ABC → Creates new record (different dock)<br>
+                          ➕ New: 2024-01-16, Terminal A, SHP001, DOCK-01, Route ABC → Creates new record (different date)
+                        </div>
+                      </div>
+                    </v-expansion-panel-text>
+                  </v-expansion-panel>
+                </v-expansion-panels>
 
                 <div class="text-subtitle-1 mb-2">Required Columns:</div>
                 <v-chip-group>
@@ -146,6 +184,12 @@
                   </v-card-text>
                 </v-card>
 
+                <!-- ✅ UPDATED: Show flexible import message -->
+                <v-alert type="info" class="mb-4">
+                  <v-icon class="mr-2">mdi-check-circle</v-icon>
+                  <strong>Flexible Import Ready:</strong> {{ preview.message }}
+                </v-alert>
+
                 <div class="text-h6 mb-2">
                   Preview Monthly Templates ({{ preview.preview.length }} shown)
                 </div>
@@ -188,10 +232,6 @@
                     </v-chip>
                   </template>
                 </v-data-table>
-
-                <v-alert type="success" class="mt-4" v-if="preview.message">
-                  {{ preview.message }}
-                </v-alert>
               </v-container>
 
               <v-card-actions>
@@ -203,7 +243,7 @@
                   @click="confirmImport"
                   :loading="importing"
                 >
-                  Confirm Monthly Import
+                  Confirm Flexible Import
                 </v-btn>
               </v-card-actions>
             </v-stepper-window-item>
@@ -216,46 +256,124 @@
                   prominent
                 >
                   <div class="text-h6">
-                    {{ importResult.success ? 'Monthly Import Successful!' : 'Monthly Import Failed' }}
+                    {{ importResult.success ? 'Flexible Monthly Import Successful!' : 'Monthly Import Failed' }}
                   </div>
                   <div class="mt-2">
                     {{ importResult.message }}
                   </div>
                 </v-alert>
 
+                <!-- ✅ UPDATED: Enhanced results summary -->
+                <v-card v-if="importResult.imported > 0" class="mt-4" variant="outlined">
+                  <v-card-title class="text-h6">Import Summary</v-card-title>
+                  <v-card-text>
+                    <v-row>
+                      <v-col cols="4">
+                        <div class="text-center">
+                          <div class="text-h4 text-success">{{ importResult.imported }}</div>
+                          <div class="text-body-2">Total Records</div>
+                        </div>
+                      </v-col>
+                      <v-col cols="4">
+                        <div class="text-center">
+                          <div class="text-h4 text-info">{{ importResult.updated || 0 }}</div>
+                          <div class="text-body-2">Updated</div>
+                        </div>
+                      </v-col>
+                      <v-col cols="4">
+                        <div class="text-center">
+                          <div class="text-h4 text-primary">{{ importResult.created || (importResult.imported - (importResult.updated || 0)) }}</div>
+                          <div class="text-body-2">Created New</div>
+                        </div>
+                      </v-col>
+                    </v-row>
+                  </v-card-text>
+                </v-card>
+
                 <v-table v-if="importResult.imported > 0" class="mt-4">
                   <tbody>
                     <tr>
-                      <td>Successfully Imported Daily Records</td>
+                      <td><v-icon class="mr-2 text-success">mdi-check-circle</v-icon>Successfully Processed</td>
                       <td class="text-right">
-                        <strong class="text-green">{{ importResult.imported }}</strong>
+                        <strong class="text-success">{{ importResult.imported }}</strong> daily records
                       </td>
                     </tr>
                     <tr v-if="importResult.failed > 0">
-                      <td>Failed Records</td>
+                      <td><v-icon class="mr-2 text-error">mdi-alert-circle</v-icon>Failed Records</td>
                       <td class="text-right">
-                        <strong class="text-red">{{ importResult.failed }}</strong>
+                        <strong class="text-error">{{ importResult.failed }}</strong> records
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><v-icon class="mr-2 text-info">mdi-update</v-icon>Duplicate Handling</td>
+                      <td class="text-right">
+                        <strong class="text-info">Smart Updates</strong> enabled
                       </td>
                     </tr>
                   </tbody>
                 </v-table>
 
+                <!-- ✅ UPDATED: Better error display with context -->
                 <div v-if="importResult.failed_details && importResult.failed_details.length > 0" class="mt-4">
-                  <div class="text-subtitle-1 mb-2">Failed imports:</div>
-                  <v-list density="compact" max-height="200" style="overflow-y: auto">
-                    <v-list-item
-                      v-for="(fail, index) in importResult.failed_details"
-                      :key="index"
-                    >
-                      <v-list-item-title>
-                        Template {{ fail.template }}{{ fail.day ? `, Day ${fail.day}` : '' }}: {{ fail.shipping_no }}
-                      </v-list-item-title>
-                      <v-list-item-subtitle>
-                        {{ fail.error }}
-                      </v-list-item-subtitle>
-                    </v-list-item>
-                  </v-list>
+                  <div class="text-subtitle-1 mb-2">
+                    <v-icon class="mr-1">mdi-alert</v-icon>
+                    Failed Import Details:
+                  </div>
+                  <v-expansion-panels>
+                    <v-expansion-panel>
+                      <v-expansion-panel-title>
+                        View {{ importResult.failed_details.length }} Failed Records
+                      </v-expansion-panel-title>
+                      <v-expansion-panel-text>
+                        <v-list density="compact" max-height="300" style="overflow-y: auto">
+                          <v-list-item
+                            v-for="(fail, index) in importResult.failed_details"
+                            :key="index"
+                          >
+                            <template v-slot:prepend>
+                              <v-icon color="error" size="small">mdi-alert-circle</v-icon>
+                            </template>
+                            <v-list-item-title>
+                              Template {{ fail.template }}{{ fail.day ? `, Day ${fail.day}` : '' }}: 
+                              <strong>{{ fail.shipping_no }}</strong>
+                            </v-list-item-title>
+                            <v-list-item-subtitle class="text-error">
+                              {{ fail.error }}
+                            </v-list-item-subtitle>
+                          </v-list-item>
+                        </v-list>
+                      </v-expansion-panel-text>
+                    </v-expansion-panel>
+                  </v-expansion-panels>
                 </div>
+
+                <!-- ✅ NEW: Import rules reminder -->
+                <v-alert type="info" class="mt-4">
+                  <div class="text-subtitle-1 mb-2">
+                    <v-icon class="mr-1">mdi-lightbulb-on</v-icon>
+                    Import Rules Applied:
+                  </div>
+                  <ul class="text-body-2">
+                    <li><strong>Duplicates Allowed:</strong> Same dock codes, terminals, etc. can exist in different records</li>
+                    <li><strong>Smart Updates:</strong> Only exact matches (Date + Terminal + Shipping No + Dock Code + Route) were updated</li>
+                    <li><strong>New Records:</strong> All other combinations created new entries</li>
+                  </ul>
+                </v-alert>
+
+                <!-- ✅ UPDATED: Better troubleshooting tips -->
+                <v-alert v-if="importResult.failed > 0" type="warning" class="mt-4">
+                  <div class="text-subtitle-1 mb-2">
+                    <v-icon class="mr-1">mdi-tools</v-icon>
+                    Troubleshooting Tips:
+                  </div>
+                  <ul class="text-body-2">
+                    <li><strong>Required Fields:</strong> Check that Month, Terminal, Shipping No, Dock Code, and Route are filled</li>
+                    <li><strong>Date Format:</strong> Use YYYY-MM format for months (e.g., 2024-01, 2024-12)</li>
+                    <li><strong>Time Format:</strong> Use HH:MM format for times (e.g., 08:30, 14:15)</li>
+                    <li><strong>Status Values:</strong> Only use "On Process", "Delay", or "Finished"</li>
+                    <li><strong>Large Files:</strong> Consider splitting very large files into smaller batches</li>
+                  </ul>
+                </v-alert>
               </v-container>
 
               <v-card-actions>
@@ -264,7 +382,7 @@
                   color="primary"
                   @click="closeAndRefresh"
                 >
-                  Close
+                  Close & Refresh Data
                 </v-btn>
               </v-card-actions>
             </v-stepper-window-item>
@@ -290,7 +408,7 @@ const file = ref(null)
 const uploading = ref(false)
 const importing = ref(false)
 
-// Column definitions - Updated for monthly import
+// ✅ UPDATED: Column definitions for flexible import
 const requiredColumns = ['Month (YYYY-MM)', 'Terminal', 'Shipping No', 'Dock Code', 'Route']
 const optionalColumns = ['Prep Start', 'Prep End', 'Load Start', 'Load End', 'Status Prep', 'Status Load']
 
@@ -311,13 +429,15 @@ const preview = ref({
   message: ''
 })
 
-// Import result
+// ✅ UPDATED: Import result with more detailed feedback
 const importResult = ref({
   success: false,
   message: '',
   imported: 0,
   failed: 0,
-  failed_details: []
+  failed_details: [],
+  updated: 0,
+  created: 0
 })
 
 // Table headers for preview - Updated for monthly data
@@ -420,7 +540,7 @@ const confirmImport = async () => {
     emit('imported', response.data.imported)
     
     if (response.data.success) {
-      snackbar.success(`Successfully imported ${response.data.imported} daily records from monthly templates`)
+      snackbar.success(`Successfully imported ${response.data.imported} daily records with flexible duplicate handling`)
     }
   } catch (error) {
     console.error('Import error:', error)
@@ -429,7 +549,9 @@ const confirmImport = async () => {
       message: error.response?.data?.detail || 'Monthly import failed',
       imported: 0,
       failed: 0,
-      failed_details: []
+      failed_details: [],
+      updated: 0,
+      created: 0
     }
     step.value = '3'
     snackbar.error('Monthly import failed')
@@ -458,7 +580,9 @@ const closeAndRefresh = () => {
       message: '',
       imported: 0,
       failed: 0,
-      failed_details: []
+      failed_details: [],
+      updated: 0,
+      created: 0
     }
   }, 300)
 }
@@ -475,5 +599,21 @@ const closeAndRefresh = () => {
 
 .text-h4 {
   font-weight: 700;
+}
+
+.v-expansion-panels {
+  border-radius: 8px;
+}
+
+.v-list-item-subtitle.text-error {
+  color: rgb(244, 67, 54) !important;
+}
+
+.v-alert ul {
+  margin-left: 16px;
+}
+
+.v-alert ul li {
+  margin-bottom: 4px;
 }
 </style>

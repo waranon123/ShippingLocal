@@ -6,7 +6,6 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, func  # Add func import here
 from typing import List, Optional
-from datetime import datetime, timedelta
 from jose import JWTError, jwt
 import bcrypt
 import os
@@ -16,11 +15,10 @@ import uuid
 import io
 import xlsxwriter
 import math
+from datetime import datetime, timedelta, date
 from calendar import monthrange
-from datetime import datetime, date
 from .models import Truck, User, create_tables, get_db
 from .schemas import TruckCreate, TruckUpdate, Token, UserResponse, Truck as TruckSchema
-from fastapi.middleware.cors import CORSMiddleware
 
 
 
@@ -693,18 +691,21 @@ async def get_trucks(
 
 @app.get("/api/trucks/template")
 async def download_import_template():
+    """Download Excel template with flexible duplicate examples"""
+    
+    # ✅ UPDATED: Template data showing duplicate examples
     template_data = {
-        'Month': ['2024-01', '2024-02', '2024-03'],
-        'Terminal': ['A', 'B', 'C'],
-        'Shipping No': ['SHP001', 'SHP002', 'SHP003'],
-        'Dock Code': ['DOCK-A1', 'DOCK-B1', 'DOCK-C1'],
-        'Route': ['Bangkok-Chonburi', 'Bangkok-Rayong', 'Bangkok-Pattaya'],
-        'Prep Start': ['08:00', '09:00', '10:00'],  # Fixed: proper time format
-        'Prep End': ['08:30', '09:30', '10:15'],    # Fixed: proper time format
-        'Load Start': ['09:00', '10:00', '11:00'],  # Fixed: proper time format
-        'Load End': ['10:00', '11:30', '12:45'],    # Fixed: proper time format
-        'Status Prep': ['Finished', 'Finished', 'On Process'],
-        'Status Load': ['Finished', 'On Process', 'On Process']
+        'Month': ['2024-01', '2024-01', '2024-02', '2024-02'],
+        'Terminal': ['A', 'A', 'B', 'B'], 
+        'Shipping No': ['SHP001', 'SHP002', 'SHP001', 'SHP001'],
+        'Dock Code': ['DOCK-A1', 'DOCK-A1', 'DOCK-B1', 'DOCK-B2'],  # Same dock allowed
+        'Route': ['Bangkok-Chonburi', 'Bangkok-Rayong', 'Bangkok-Chonburi', 'Bangkok-Chonburi'],  # Same route allowed
+        'Prep Start': ['08:00', '09:00', '08:00', '10:00'],
+        'Prep End': ['08:30', '09:30', '08:30', '10:15'],
+        'Load Start': ['09:00', '10:00', '09:00', '11:00'],
+        'Load End': ['10:00', '11:30', '10:00', '12:45'],
+        'Status Prep': ['Finished', 'Finished', 'On Process', 'Delay'],
+        'Status Load': ['Finished', 'On Process', 'On Process', 'On Process']
     }
     
     df = pd.DataFrame(template_data)
@@ -742,34 +743,146 @@ async def download_import_template():
         worksheet.set_column('E:E', 20)  # Route
         worksheet.set_column('J:K', 12)  # Status columns
         
-        # Instructions sheet
+        # ✅ UPDATED: Instructions sheet with flexible duplicate rules
         instructions = workbook.add_worksheet('Instructions')
-        instructions.write('A1', 'Monthly Import Instructions:', workbook.add_format({'bold': True, 'size': 14}))
+        instructions.write('A1', 'Flexible Monthly Import Instructions:', workbook.add_format({'bold': True, 'size': 14}))
         
         instruction_list = [
+            '',  # Empty line
+            'BASIC RULES:',
             '1. Fill in the Template sheet with your monthly truck data',
             '2. Required fields: Month, Terminal, Shipping No, Dock Code, Route',
             '3. Month format: YYYY-MM (e.g., 2024-01 for January 2024)',
             '4. Time format: HH:MM (e.g., 08:00, 14:30)',
-            '5. Keep time fields as text - do not let Excel convert to time',
-            '6. Valid status values: "On Process", "Delay", "Finished"',
-            '7. Each row creates daily records for the entire month',
-            '8. Example: "2024-01" creates 31 records (Jan 1-31, 2024)',
-            '9. Time fields are copied to all daily records',
-            '10. Save and upload through Management page'
+            '5. Valid status values: "On Process", "Delay", "Finished"',
+            '',
+            'DUPLICATE HANDLING:',
+            '6. ✅ DUPLICATES ALLOWED: Same dock codes, terminals, routes can exist',
+            '7. ✅ FLEXIBLE UPDATES: Only exact matches get updated',
+            '8. ✅ SMART CREATION: Different combinations create new records',
+            '',
+            'UPDATE CONDITIONS (ALL must match):',
+            '9. Same Date + Same Terminal + Same Shipping No + Same Dock Code + Same Route',
+            '10. Example: 2024-01-15, Terminal A, SHP001, DOCK-01, Route ABC → Updates',
+            '11. Different: 2024-01-15, Terminal A, SHP001, DOCK-02, Route ABC → New record',
+            '',
+            'MONTHLY PROCESSING:',
+            '12. Each row creates daily records for the entire month',
+            '13. Example: "2024-01" creates 31 records (Jan 1-31, 2024)',
+            '14. Time fields are copied to all daily records',
+            '15. Save file and upload through Management page'
         ]
         
         for i, instruction in enumerate(instruction_list):
-            instructions.write(f'A{i+3}', instruction)
-    
+            cell_format = workbook.add_format({'bold': True}) if instruction.startswith(('BASIC', 'DUPLICATE', 'UPDATE', 'MONTHLY')) else None
+            instructions.write(f'A{i+3}', instruction, cell_format)
+        
+        # ✅ ADD: Examples sheet
+        examples = workbook.add_worksheet('Examples')
+        examples.write('A1', 'Import Behavior Examples:', workbook.add_format({'bold': True, 'size': 14}))
+        
+        example_scenarios = [
+            '',
+            'SCENARIO 1 - WILL UPDATE:',
+            'Existing: 2024-01-15 | Terminal A | SHP001 | DOCK-01 | Route ABC',
+            'Import:   2024-01-15 | Terminal A | SHP001 | DOCK-01 | Route ABC',
+            'Result:   Updates preparation/loading times and status only',
+            '',
+            'SCENARIO 2 - WILL CREATE NEW (Different Dock):',
+            'Existing: 2024-01-15 | Terminal A | SHP001 | DOCK-01 | Route ABC',
+            'Import:   2024-01-15 | Terminal A | SHP001 | DOCK-02 | Route ABC',
+            'Result:   Creates new record (dock code different)',
+            '',
+            'SCENARIO 3 - WILL CREATE NEW (Different Date):',
+            'Existing: 2024-01-15 | Terminal A | SHP001 | DOCK-01 | Route ABC',
+            'Import:   2024-01-16 | Terminal A | SHP001 | DOCK-01 | Route ABC',
+            'Result:   Creates new record (date different)',
+            '',
+            'SCENARIO 4 - DUPLICATES ALLOWED:',
+            'Multiple records can have:',
+            '- Same dock codes (DOCK-01, DOCK-01, DOCK-01)',
+            '- Same terminals (Terminal A for many records)',  
+            '- Same routes (Bangkok-Chonburi for many trucks)',
+            '- Same shipping numbers (on different dates)',
+            '',
+            'KEY POINT: Only EXACT matches (all 5 fields) get updated!'
+        ]
+        
+        for i, example in enumerate(example_scenarios):
+            cell_format = workbook.add_format({'bold': True}) if example.startswith(('SCENARIO', 'KEY POINT')) else None
+            examples.write(f'A{i+3}', example, cell_format)
+
     output.seek(0)
     return Response(
         content=output.getvalue(),
         media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        headers={'Content-Disposition': 'attachment; filename=truck_monthly_import_template.xlsx'}
+        headers={'Content-Disposition': 'attachment; filename=truck_flexible_monthly_import_template.xlsx'}
     )
-# Update the preview import endpoint
-# แก้ไข backend/app/main.py - ส่วน import preview และ confirm
+
+# ============================================================================
+# HELPER FUNCTIONS: Database utilities for flexible import
+# ============================================================================
+
+def get_existing_truck_by_all_criteria(
+    db: Session, 
+    record_date: date, 
+    terminal: str, 
+    shipping_no: str, 
+    dock_code: str, 
+    truck_route: str
+):
+    """
+    Get existing truck record that matches ALL criteria for update
+    Returns None if any field doesn't match (will create new record)
+    """
+    return db.query(Truck).filter(
+        and_(
+            func.date(Truck.created_at) == record_date,
+            Truck.terminal == terminal,
+            Truck.shipping_no == shipping_no,
+            Truck.dock_code == dock_code,
+            Truck.truck_route == truck_route
+        )
+    ).first()
+
+def count_duplicate_combinations(db: Session):
+    """
+    Debug function to show duplicate statistics
+    """
+    # Count records with same dock codes
+    dock_duplicates = db.query(
+        Truck.dock_code, 
+        func.count(Truck.id).label('count')
+    ).group_by(Truck.dock_code).having(func.count(Truck.id) > 1).all()
+    
+    # Count records with same shipping numbers
+    shipping_duplicates = db.query(
+        Truck.shipping_no, 
+        func.count(Truck.id).label('count')
+    ).group_by(Truck.shipping_no).having(func.count(Truck.id) > 1).all()
+    
+    return {
+        "dock_code_duplicates": [{"dock_code": d.dock_code, "count": d.count} for d in dock_duplicates],
+        "shipping_no_duplicates": [{"shipping_no": s.shipping_no, "count": s.count} for s in shipping_duplicates],
+        "total_records": db.query(Truck).count()
+    }
+
+@app.get("/api/trucks/duplicate-stats")
+async def get_duplicate_statistics(
+    current_user: UserResponse = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get statistics about duplicate data in the system"""
+    try:
+        stats = count_duplicate_combinations(db)
+        return {
+            "success": True,
+            "duplicate_statistics": stats,
+            "message": "Showing duplicate counts - this is normal and allowed in flexible import mode"
+        }
+    except Exception as e:
+        raise HTTPException(500, f"Failed to get duplicate stats: {str(e)}")
+
 
 @app.post("/api/trucks/import/preview")
 async def preview_excel_import(
@@ -809,17 +922,17 @@ async def preview_excel_import(
         total_records_to_create = 0
         
         def format_time_field(value):
-            """แปลงค่าเวลาจาก Excel ให้เป็น HH:MM format"""
+            """Convert Excel time values to HH:MM format"""
             if pd.isna(value) or value == '' or value is None:
                 return None
             
             try:
-                # ถ้าเป็น string แล้ว
+                # If it's already a string
                 if isinstance(value, str):
                     value = value.strip()
                     if not value:
                         return None
-                    # ตรวจสอบรูปแบบ HH:MM
+                    # Check HH:MM format
                     if ':' in value:
                         parts = value.split(':')
                         if len(parts) >= 2:
@@ -828,7 +941,7 @@ async def preview_excel_import(
                             return f"{hours:02d}:{minutes:02d}"
                     return value
                 
-                # ถ้าเป็น number (Excel time format: 0.5 = 12:00)
+                # If it's a number (Excel time format: 0.5 = 12:00)
                 if isinstance(value, (int, float)):
                     # Excel stores time as decimal fraction of a day
                     total_minutes = int(value * 24 * 60)
@@ -836,11 +949,11 @@ async def preview_excel_import(
                     minutes = total_minutes % 60
                     return f"{hours:02d}:{minutes:02d}"
                 
-                # ถ้าเป็น datetime object
+                # If it's a datetime object
                 if hasattr(value, 'hour') and hasattr(value, 'minute'):
                     return f"{value.hour:02d}:{value.minute:02d}"
                 
-                # ลองแปลงเป็น string แล้วประมวลผล
+                # Try to convert to string and process
                 str_value = str(value).strip()
                 if ':' in str_value:
                     parts = str_value.split(':')
@@ -856,6 +969,7 @@ async def preview_excel_import(
                 print(f"❌ Time formatting error: {e}, Value: {value}")
                 return None
         
+        # ✅ UPDATED: Remove duplicate validation, allow all records
         for index, row in df.iterrows():
             try:
                 truck_template = {}
@@ -893,7 +1007,7 @@ async def preview_excel_import(
                         continue
                     truck_template[db_col] = str(value).strip()
                 
-                # Process optional columns - ใส่ใจกับ time fields
+                # Process optional columns - pay attention to time fields
                 for excel_col, db_col in optional_columns.items():
                     if excel_col in df.columns:
                         value = row.get(excel_col)
@@ -949,156 +1063,11 @@ async def preview_excel_import(
             "total_records_to_create": total_records_to_create,
             "errors": errors,
             "columns_found": list(df.columns),
-            "message": f"Will create {total_records_to_create} daily records from {len(trucks_preview)} monthly templates"
+            "message": f"Will create {total_records_to_create} daily records from {len(trucks_preview)} monthly templates. Duplicate dock codes and other data are allowed. Only exact matches (date + terminal + shipping_no + dock_code + route) will be updated."
         })
         
     except Exception as e:
         raise HTTPException(400, f"Error reading Excel file: {str(e)}")
-
-@app.post("/api/trucks/import/confirm")
-async def confirm_excel_import(
-    data: dict,
-    current_user: UserResponse = Depends(check_permission("user")),
-    db: Session = Depends(get_db)
-):
-    session_id = data.get('session_id')
-    session = import_sessions.get(session_id)
-    if not session:
-        raise HTTPException(400, "Import session not found or expired")
-
-    if session['user_id'] != current_user.id:
-        raise HTTPException(403, "Unauthorized")
-
-    truck_templates = session['truck_templates']
-    imported_count = 0
-    failed_imports = []
-
-    try:
-        for template_index, truck_template in enumerate(truck_templates):
-            try:
-                year = truck_template['year']
-                month = truck_template['month']
-                days_in_month = monthrange(year, month)[1]
-                base_shipping_no = truck_template['shipping_no']
-
-                # Create a record for each day of the month
-                for day in range(1, days_in_month + 1):
-                    try:
-                        record_date = date(year, month, day)
-
-                        # Check for existing record
-                        existing = db.query(Truck).filter(
-                            and_(
-                                Truck.shipping_no == base_shipping_no,
-                                func.date(Truck.created_at) == record_date
-                            )
-                        ).first()
-
-                        # *** FIX: เก็บ time fields ให้ครบ ***
-                        truck_data_dict = {
-                            'terminal': truck_template['terminal'],
-                            'shipping_no': base_shipping_no,
-                            'dock_code': truck_template['dock_code'],
-                            'truck_route': truck_template['truck_route'],
-                            'preparation_start': truck_template.get('preparation_start'),
-                            'preparation_end': truck_template.get('preparation_end'),
-                            'loading_start': truck_template.get('loading_start'),
-                            'loading_end': truck_template.get('loading_end'),
-                            'status_preparation': truck_template.get('status_preparation', 'On Process'),
-                            'status_loading': truck_template.get('status_loading', 'On Process'),
-                        }
-                        
-                        print(f"📝 Processing truck data for {record_date}:", {
-                            'shipping_no': truck_data_dict['shipping_no'],
-                            'preparation_start': truck_data_dict['preparation_start'],
-                            'preparation_end': truck_data_dict['preparation_end'],
-                            'loading_start': truck_data_dict['loading_start'],
-                            'loading_end': truck_data_dict['loading_end']
-                        })
-
-                        if existing:
-                            # Update existing record - ใส่ time fields ด้วย
-                            for key, value in truck_data_dict.items():
-                                setattr(existing, key, value)
-                            existing.updated_at = datetime.utcnow()
-                            created_truck = existing
-                            print(f"✅ Updated existing truck: {existing.id}")
-                        else:
-                            # Create new record - ใส่ time fields ด้วย
-                            db_truck = Truck(**truck_data_dict)
-                            db_truck.id = str(uuid.uuid4())
-                            db_truck.created_at = datetime.combine(record_date, datetime.min.time())
-                            db.add(db_truck)
-                            created_truck = db_truck
-                            print(f"✅ Created new truck: {db_truck.id}")
-
-                        db.commit()
-                        db.refresh(created_truck)
-                        imported_count += 1
-
-                        # Broadcast only for today's records to avoid spam
-                        if record_date == date.today():
-                            await manager.broadcast({
-                                "type": "truck_created",
-                                "data": {
-                                    "id": created_truck.id,
-                                    "terminal": created_truck.terminal,
-                                    "shipping_no": created_truck.shipping_no,
-                                    "dock_code": created_truck.dock_code,
-                                    "truck_route": created_truck.truck_route,
-                                    "preparation_start": created_truck.preparation_start,
-                                    "preparation_end": created_truck.preparation_end,
-                                    "loading_start": created_truck.loading_start,
-                                    "loading_end": created_truck.loading_end,
-                                    "status_preparation": created_truck.status_preparation,
-                                    "status_loading": created_truck.status_loading,
-                                    "created_at": created_truck.created_at.isoformat(),
-                                    "updated_at": created_truck.updated_at.isoformat() if created_truck.updated_at else None
-                                }
-                            })
-
-                    except Exception as day_error:
-                        print(f"❌ Day error for template {template_index + 1}, day {day}: {str(day_error)}")
-                        failed_imports.append({
-                            "template": template_index + 1,
-                            "day": day,
-                            "shipping_no": base_shipping_no,
-                            "error": str(day_error)
-                        })
-                        db.rollback()  # Rollback failed transaction
-
-            except Exception as template_error:
-                print(f"❌ Template error for template {template_index + 1}: {str(template_error)}")
-                failed_imports.append({
-                    "template": template_index + 1,
-                    "shipping_no": truck_template.get('shipping_no', 'Unknown'),
-                    "error": str(template_error)
-                })
-
-        # Clean up session
-        if session_id in import_sessions:
-            del import_sessions[session_id]
-
-        print(f"✅ Import completed: {imported_count} imported, {len(failed_imports)} failed")
-
-        return clean_for_json({
-            "success": True,
-            "imported": imported_count,
-            "failed": len(failed_imports),
-            "failed_details": failed_imports,
-            "message": f"Successfully imported {imported_count} daily records from monthly templates"
-        })
-
-    except Exception as e:
-        print(f"❌ Import exception: {str(e)}")
-        import traceback
-        traceback.print_exc()
-
-        # Clean up session on error
-        if session_id in import_sessions:
-            del import_sessions[session_id]
-
-        raise HTTPException(500, f"Import failed: {str(e)}")
     
 
 @app.post("/api/trucks/import/confirm")
@@ -1117,7 +1086,11 @@ async def confirm_excel_import(
 
     truck_templates = session['truck_templates']
     imported_count = 0
+    updated_count = 0
+    created_count = 0
     failed_imports = []
+
+    print(f"🚀 Starting flexible import of {len(truck_templates)} templates")
 
     try:
         for template_index, truck_template in enumerate(truck_templates):
@@ -1125,67 +1098,91 @@ async def confirm_excel_import(
                 year = truck_template['year']
                 month = truck_template['month']
                 days_in_month = monthrange(year, month)[1]
-
-                # ใช้ shipping_no เดิมจาก template
                 base_shipping_no = truck_template['shipping_no']
+
+                print(f"📅 Processing template {template_index + 1}: {base_shipping_no} for {year}-{month} ({days_in_month} days)")
 
                 # Create a record for each day of the month
                 for day in range(1, days_in_month + 1):
                     try:
                         record_date = date(year, month, day)
 
-                        # ตรวจสอบว่ามี record สำหรับวันนั้นอยู่แล้วหรือไม่
+                        # ✅ UPDATED: Check for existing record with ALL matching criteria
+                        # Condition: date + terminal + shipping_no + dock_code + truck_route must all match
                         existing = db.query(Truck).filter(
                             and_(
+                                func.date(Truck.created_at) == record_date,
+                                Truck.terminal == truck_template['terminal'],
                                 Truck.shipping_no == base_shipping_no,
-                                func.date(Truck.created_at) == record_date
+                                Truck.dock_code == truck_template['dock_code'],
+                                Truck.truck_route == truck_template['truck_route']
                             )
                         ).first()
 
+                        # Prepare truck data dictionary
+                        truck_data_dict = {
+                            'terminal': truck_template['terminal'],
+                            'shipping_no': base_shipping_no,
+                            'dock_code': truck_template['dock_code'],
+                            'truck_route': truck_template['truck_route'],
+                            'preparation_start': truck_template.get('preparation_start'),
+                            'preparation_end': truck_template.get('preparation_end'),
+                            'loading_start': truck_template.get('loading_start'),
+                            'loading_end': truck_template.get('loading_end'),
+                            'status_preparation': truck_template.get('status_preparation', 'On Process'),
+                            'status_loading': truck_template.get('status_loading', 'On Process'),
+                        }
+                        
+                        print(f"📝 Processing truck data for {record_date}: {truck_data_dict['shipping_no']}")
+
                         if existing:
-                            # Update existing record
-                            for key, value in truck_template.items():
-                                if key not in ['year', 'month', 'preview_days']:
+                            # ✅ UPDATE: Update existing record - only time fields and status
+                            print(f"🔄 Updating existing record: {existing.id}")
+                            for key, value in truck_data_dict.items():
+                                # Only update time and status fields, keep original core data
+                                if key in ['preparation_start', 'preparation_end', 'loading_start', 'loading_end', 'status_preparation', 'status_loading']:
                                     setattr(existing, key, value)
                             existing.updated_at = datetime.utcnow()
                             created_truck = existing
+                            updated_count += 1
+                            
                         else:
-                            # Create new record
-                            truck_data = {}
-                            for key, value in truck_template.items():
-                                if key not in ['year', 'month', 'preview_days']:
-                                    truck_data[key] = value
-
-                            db_truck = Truck(**truck_data)
+                            # ✅ INSERT: Create new record (duplicates allowed)
+                            print(f"➕ Creating new record for {record_date}")
+                            db_truck = Truck(**truck_data_dict)
                             db_truck.id = str(uuid.uuid4())
                             db_truck.created_at = datetime.combine(record_date, datetime.min.time())
                             db.add(db_truck)
                             created_truck = db_truck
+                            created_count += 1
 
                         db.commit()
                         db.refresh(created_truck)
                         imported_count += 1
 
-                        # Broadcast only for today's records to avoid spam
-                        if record_date == date.today():
-                            await manager.broadcast({
-                                "type": "truck_created",
-                                "data": {
-                                    "id": created_truck.id,
-                                    "terminal": created_truck.terminal,
-                                    "shipping_no": created_truck.shipping_no,
-                                    "dock_code": created_truck.dock_code,
-                                    "truck_route": created_truck.truck_route,
-                                    "preparation_start": created_truck.preparation_start,
-                                    "preparation_end": created_truck.preparation_end,
-                                    "loading_start": created_truck.loading_start,
-                                    "loading_end": created_truck.loading_end,
-                                    "status_preparation": created_truck.status_preparation,
-                                    "status_loading": created_truck.status_loading,
-                                    "created_at": created_truck.created_at.isoformat(),
-                                    "updated_at": created_truck.updated_at.isoformat() if created_truck.updated_at else None
-                                }
-                            })
+                        # Broadcast update (optional - for WebSocket)
+                        if hasattr(manager, 'broadcast'):  # Check if WebSocket manager exists
+                            try:
+                                await manager.broadcast({
+                                    "type": "truck_updated" if existing else "truck_created",
+                                    "data": {
+                                        "id": created_truck.id,
+                                        "terminal": created_truck.terminal,
+                                        "shipping_no": created_truck.shipping_no,
+                                        "dock_code": created_truck.dock_code,
+                                        "truck_route": created_truck.truck_route,
+                                        "preparation_start": created_truck.preparation_start,
+                                        "preparation_end": created_truck.preparation_end,
+                                        "loading_start": created_truck.loading_start,
+                                        "loading_end": created_truck.loading_end,
+                                        "status_preparation": created_truck.status_preparation,
+                                        "status_loading": created_truck.status_loading,
+                                        "created_at": created_truck.created_at.isoformat(),
+                                        "updated_at": created_truck.updated_at.isoformat() if created_truck.updated_at else None
+                                    }
+                                })
+                            except Exception as ws_error:
+                                print(f"WebSocket broadcast error: {ws_error}")
 
                     except Exception as day_error:
                         print(f"❌ Day error for template {template_index + 1}, day {day}: {str(day_error)}")
@@ -1209,14 +1206,16 @@ async def confirm_excel_import(
         if session_id in import_sessions:
             del import_sessions[session_id]
 
-        print(f"✅ Import completed: {imported_count} imported, {len(failed_imports)} failed")
+        print(f"✅ Import completed: {imported_count} imported ({updated_count} updated, {created_count} created), {len(failed_imports)} failed")
 
         return clean_for_json({
             "success": True,
             "imported": imported_count,
+            "updated": updated_count,
+            "created": created_count,
             "failed": len(failed_imports),
             "failed_details": failed_imports,
-            "message": f"Successfully imported {imported_count} daily records from monthly templates"
+            "message": f"Successfully imported {imported_count} daily records from monthly templates. Updated {updated_count} existing records, created {created_count} new records. Flexible duplicate handling applied."
         })
 
     except Exception as e:
@@ -1229,6 +1228,59 @@ async def confirm_excel_import(
             del import_sessions[session_id]
 
         raise HTTPException(500, f"Import failed: {str(e)}")
+    
+
+@app.get("/api/trucks/check-duplicates")
+async def check_duplicate_conditions(
+    date: str,
+    terminal: str,
+    shipping_no: str,
+    dock_code: str,
+    truck_route: str,
+    current_user: UserResponse = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Debug endpoint to check if a record would be updated or created new"""
+    try:
+        # Parse date
+        try:
+            record_date = datetime.strptime(date, '%Y-%m-%d').date()
+        except ValueError:
+            raise HTTPException(400, f"Invalid date format. Use YYYY-MM-DD. Got: {date}")
+        
+        # Check for existing record with ALL matching criteria
+        existing = db.query(Truck).filter(
+            and_(
+                func.date(Truck.created_at) == record_date,
+                Truck.terminal == terminal,
+                Truck.shipping_no == shipping_no,
+                Truck.dock_code == dock_code,
+                Truck.truck_route == truck_route
+            )
+        ).first()
+
+        return {
+            "exists": bool(existing),
+            "action": "update" if existing else "create_new",
+            "record": {
+                "id": existing.id if existing else None,
+                "created_at": existing.created_at.isoformat() if existing else None,
+                "updated_at": existing.updated_at.isoformat() if existing and existing.updated_at else None
+            } if existing else None,
+            "matching_conditions": {
+                "date": date,
+                "terminal": terminal,
+                "shipping_no": shipping_no,
+                "dock_code": dock_code,
+                "truck_route": truck_route
+            },
+            "explanation": "Record will be updated only if ALL 5 conditions match exactly. Otherwise, a new record will be created."
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Failed to check duplicates: {str(e)}")
 
     
 @app.get("/api/trucks/{truck_id}")
