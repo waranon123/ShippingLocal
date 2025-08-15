@@ -590,7 +590,7 @@ const headers = [
 const loading = computed(() => truckStore.loading)
 const trucks = computed(() => truckStore.trucks)
 
-// Filtered trucks based on all filters
+// Filtered and sorted trucks based on all filters
 const filteredTrucks = computed(() => {
   let result = trucks.value
   
@@ -613,6 +613,22 @@ const filteredTrucks = computed(() => {
   if (selectedLoadStatus.value) {
     result = result.filter(truck => truck.status_loading === selectedLoadStatus.value)
   }
+  
+  // Sort by Terminal first, then by Loading End time (earliest to latest)
+  result = [...result].sort((a, b) => {
+    // First sort by terminal
+    if (a.terminal !== b.terminal) {
+      return a.terminal.localeCompare(b.terminal)
+    }
+    
+    // Then sort by loading_end time (empty times go to the end)
+    if (!a.loading_end && !b.loading_end) return 0
+    if (!a.loading_end) return 1  // Move empty times to end
+    if (!b.loading_end) return -1 // Move empty times to end
+    
+    // Compare times (HH:MM format)
+    return a.loading_end.localeCompare(b.loading_end)
+  })
   
   return result
 })
