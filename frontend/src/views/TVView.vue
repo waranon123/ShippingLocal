@@ -11,17 +11,21 @@
       class="full-screen-carousel"
       @update:model-value="handleCarouselChange"
     >
-      <v-carousel-item v-for="(shippingGroup, index) in shippingPages" :key="index">
+      <!-- Slide for each shipping group -->
+      <v-carousel-item v-for="(group, index) in shippingGroups" :key="`group-${index}`">
         <div class="full-height">
           <v-card class="elevation-4 rounded-xl pa-10 mx-auto card-container">
             <v-card-title class="text-h2 font-weight-bold text-center py-8 primary-text">
-              Shipping Group - Page {{ index + 1 }} / {{ shippingPages.length }}
+              Shipping No: {{ group.shippingNo }}
+              <v-chip v-if="group.pages > 1" class="ml-4 text-h5" color="primary" variant="outlined">
+                Page {{ group.currentPage }} / {{ group.pages }}
+              </v-chip>
             </v-card-title>
             
             <v-table class="tv-table">
               <thead>
                 <tr>
-                  <th class="text-left text-h5 font-weight-bold">Shipping No.</th>
+                  <th class="text-left text-h5 font-weight-bold">Terminal</th>
                   <th class="text-left text-h5 font-weight-bold">Dock Code</th>
                   <th class="text-left text-h5 font-weight-bold">Route</th>
                   <th class="text-left text-h5 font-weight-bold">Preparation</th>
@@ -29,8 +33,8 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="truck in shippingGroup.trucks" :key="truck.id" class="tv-row">
-                  <td class="text-h5 font-weight-medium">{{ truck.shipping_no }}</td>
+                <tr v-for="truck in group.trucks" :key="truck.id" class="tv-row">
+                  <td class="text-h5 font-weight-medium">{{ truck.terminal }}</td>
                   <td class="text-h5 font-weight-medium">{{ truck.dock_code }}</td>
                   <td class="text-h5 font-weight-medium">{{ truck.truck_route }}</td>
                   <td>
@@ -60,12 +64,33 @@
                 </tr>
               </tbody>
             </v-table>
+            
+            <!-- Footer with summary -->
+            <v-card-text class="mt-4 text-center">
+              <v-row>
+                <v-col cols="4">
+                  <div class="text-h5 text-grey-darken-2">
+                    Total in this group: <strong>{{ group.totalTrucks }}</strong>
+                  </div>
+                </v-col>
+                <v-col cols="4">
+                  <div class="text-h5 text-grey-darken-2">
+                    Date: <strong>{{ formatDate(new Date()) }}</strong>
+                  </div>
+                </v-col>
+                <v-col cols="4">
+                  <div class="text-h5 text-grey-darken-2">
+                    Time: <strong>{{ currentTime }}</strong>
+                  </div>
+                </v-col>
+              </v-row>
+            </v-card-text>
           </v-card>
         </div>
       </v-carousel-item>
       
       <!-- No Data Slide -->
-      <v-carousel-item v-if="shippingPages.length === 0 || (shippingPages.length === 1 && shippingPages[0].trucks.length === 0)">
+      <v-carousel-item v-if="shippingGroups.length === 0">
         <div class="full-height">
           <v-card class="elevation-4 rounded-xl pa-10 mx-auto card-container">
             <v-card-text class="text-center">
@@ -73,6 +98,9 @@
               <div class="text-h2 text-grey">No Trucks Available</div>
               <div class="text-h5 text-grey mt-4">
                 {{ loading ? 'Loading data...' : 'No truck data for today' }}
+              </div>
+              <div class="text-h6 text-grey mt-4">
+                Current Time: {{ currentTime }}
               </div>
             </v-card-text>
           </v-card>
@@ -107,12 +135,12 @@
             <div class="text-body-2 mb-2">
               <strong>Statistics:</strong>
             </div>
-            <v-chip color="primary" class="mr-2">Total: {{ statistics.total }}</v-chip>
-            <v-chip color="yellow-darken-1" class="mr-2">In Progress: {{ statistics.inProgress }}</v-chip>
-            <v-chip color="green">Completed: {{ statistics.completed }}</v-chip>
+            <v-chip color="primary" class="mr-2">Total Trucks: {{ statistics.total }}</v-chip>
+            <v-chip color="info" class="mr-2">Groups: {{ uniqueShippingNos.length }}</v-chip>
+            <v-chip color="success">Slides: {{ shippingGroups.length }}</v-chip>
           </v-col>
           <v-col cols="12">
-            <v-chip>Current Slide: {{ currentSlide + 1 }} / {{ shippingPages.length }}</v-chip>
+            <v-chip>Current Slide: {{ currentSlide + 1 }} / {{ shippingGroups.length }}</v-chip>
           </v-col>
         </v-row>
       </v-card-text>
@@ -123,82 +151,90 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useTruckStore } from '@/stores/trucks'
-import { useRouter } from 'vue-router'
 
 const truckStore = useTruckStore()
-const router = useRouter()
 const currentSlide = ref(0)
 const showError = ref(false)
 const loading = computed(() => truckStore.loading)
-const itemsPerPage = 3
+const itemsPerPage = 3 // Max trucks per page
 const intervalTime = ref(8000) // 8 seconds per slide
 const showControls = ref(false) // Set to true for debugging
+const currentTime = ref('')
 
-// Session management for guest view
-const sessionTimeout = ref(null)
-const lastActivity = ref(Date.now())
-const SESSION_DURATION = 30 * 60 * 1000 // 30 minutes in milliseconds
-const WARNING_BEFORE = 5 * 60 * 1000 // Show warning 5 minutes before timeout
-
-// Function to reset session timeout
-const resetSessionTimeout = () => {
-  lastActivity.value = Date.now()
-  
-  // Clear existing timeout
-  if (sessionTimeout.value) {
-    clearTimeout(sessionTimeout.value)
-  }
-  
-  // Set new timeout
-  sessionTimeout.value = setTimeout(() => {
-    // Check if user is guest
-    const userRole = localStorage.getItem('userRole') || sessionStorage.getItem('userRole')
-    if (userRole === 'guest') {
-      // Auto refresh session for TV view
-      extendSession()
-    }
-  }, SESSION_DURATION - WARNING_BEFORE)
+// Update current time
+const updateTime = () => {
+  const now = new Date()
+  currentTime.value = now.toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  })
 }
 
-// Function to extend session
-const extendSession = async () => {
-  try {
-    // Call API to refresh session or token
-    const token = localStorage.getItem('token') || sessionStorage.getItem('token')
-    if (token) {
-      // Refresh token or extend session
-      // await truckStore.refreshSession() // Uncomment if you have this method
+// Natural Sort function for shipping numbers
+const naturalSort = (a, b) => {
+  const extractParts = (str) => {
+    const parts = []
+    let currentPart = ''
+    let isNumeric = false
+    
+    for (let i = 0; i < str.length; i++) {
+      const char = str[i]
+      const charIsNumeric = !isNaN(char) && char !== ' '
       
-      // Reset the timeout
-      resetSessionTimeout()
-      
-      console.log('Guest session extended for TV view')
+      if (charIsNumeric !== isNumeric && currentPart) {
+        parts.push({
+          value: isNumeric ? parseInt(currentPart) : currentPart,
+          isNumeric
+        })
+        currentPart = char
+        isNumeric = charIsNumeric
+      } else {
+        currentPart += char
+        isNumeric = charIsNumeric
+      }
     }
-  } catch (error) {
-    console.error('Failed to extend session:', error)
+    
+    if (currentPart) {
+      parts.push({
+        value: isNumeric ? parseInt(currentPart) : currentPart,
+        isNumeric
+      })
+    }
+    
+    return parts
   }
-}
-
-// Monitor user activity (for TV view, we consider carousel changes as activity)
-const handleActivity = () => {
-  const now = Date.now()
-  // Only reset if more than 1 minute has passed since last activity
-  if (now - lastActivity.value > 60000) {
-    resetSessionTimeout()
+  
+  const partsA = extractParts(a)
+  const partsB = extractParts(b)
+  
+  for (let i = 0; i < Math.min(partsA.length, partsB.length); i++) {
+    const partA = partsA[i]
+    const partB = partsB[i]
+    
+    if (partA.isNumeric && partB.isNumeric) {
+      if (partA.value !== partB.value) {
+        return partA.value - partB.value
+      }
+    } else if (partA.isNumeric && !partB.isNumeric) {
+      return -1
+    } else if (!partA.isNumeric && partB.isNumeric) {
+      return 1
+    } else {
+      const comparison = partA.value.localeCompare(partB.value)
+      if (comparison !== 0) {
+        return comparison
+      }
+    }
   }
+  
+  return partsA.length - partsB.length
 }
 
-// Watch for carousel changes
-const handleCarouselChange = () => {
-  handleActivity()
-}
-
-// Get trucks with enhanced sorting from right code
+// Get today's trucks
 const trucks = computed(() => {
-  // Get today's date
   const today = new Date().toISOString().split('T')[0]
   
-  // Filter for today's trucks OR use date filter if set
   const filteredTrucks = truckStore.dateFilter.fromDate || truckStore.dateFilter.toDate
     ? truckStore.trucks.filter(truck => {
         const date = new Date(truck.created_at).toISOString().split('T')[0]
@@ -210,98 +246,90 @@ const trucks = computed(() => {
         return truckDate === today
       })
   
-  // Enhanced sorting from right code
+  // Sort by shipping_no and then by loading time
   return filteredTrucks.sort((a, b) => {
-    // First: Check if both preparation and loading are finished
-    const aIsComplete = a.status_preparation === 'Finished' && a.status_loading === 'Finished'
-    const bIsComplete = b.status_preparation === 'Finished' && b.status_loading === 'Finished'
+    // First sort by shipping_no
+    const shippingCompare = naturalSort(a.shipping_no || '', b.shipping_no || '')
+    if (shippingCompare !== 0) return shippingCompare
     
-    // If one is complete and the other isn't, complete goes to the end
-    if (aIsComplete && !bIsComplete) return 1
-    if (!aIsComplete && bIsComplete) return -1
-    
-    // Sort by shipping_no instead of terminal
-    if (a.shipping_no !== b.shipping_no) {
-      return a.shipping_no.localeCompare(b.shipping_no)
-    }
-    
-    // Then sort by loading_end time (earliest first)
+    // Then sort by loading_end time
     if (!a.loading_end && !b.loading_end) return 0
-    if (!a.loading_end) return 1  // No time goes to end
-    if (!b.loading_end) return -1 // No time goes to end
-    
+    if (!a.loading_end) return 1
+    if (!b.loading_end) return -1
     return a.loading_end.localeCompare(b.loading_end)
   })
 })
 
-// Enhanced shipping pages grouped by shipping no
-const shippingPages = computed(() => {
-  // Enhanced trucks with additional data
-  const enhancedTrucks = trucks.value.map(truck => ({
-    ...truck,
-    // Ensure all required fields exist
-    shipping_no: truck.shipping_no || 'Unknown',
-    terminal: truck.terminal || 'Unknown',
-    dock_code: truck.dock_code || 'Unknown',
-    truck_route: truck.truck_route || 'Unknown Route',
-    status_preparation: truck.status_preparation || 'On Process',
-    status_loading: truck.status_loading || 'On Process',
-    preparation_start: truck.preparation_start || '',
-    preparation_end: truck.preparation_end || '',
-    loading_start: truck.loading_start || '',
-    loading_end: truck.loading_end || '',
-    created_at: truck.created_at || new Date().toISOString(),
-    isCompleted: truck.status_preparation === 'Finished' && truck.status_loading === 'Finished'
-  }))
-
-  // Create pages with items per page limit
-  const result = []
-  for (let i = 0; i < enhancedTrucks.length; i += itemsPerPage) {
-    result.push({
-      trucks: enhancedTrucks.slice(i, i + itemsPerPage)
-    })
-  }
-
-  return result.length ? result : [{ trucks: [] }]
+// Get unique shipping numbers with natural sort
+const uniqueShippingNos = computed(() => {
+  const shippingNos = [...new Set(trucks.value.map(t => t.shipping_no).filter(Boolean))]
+  return shippingNos.sort(naturalSort)
 })
 
-// Statistics from right code
-const statistics = computed(() => {
-  const total = trucks.value.length
-  const completed = trucks.value.filter(t => 
-    t.status_preparation === 'Finished' && t.status_loading === 'Finished'
-  ).length
-  const inProgress = trucks.value.filter(t => 
-    (t.status_preparation !== 'Finished' || t.status_loading !== 'Finished')
-  ).length
+// Create shipping groups with pagination
+const shippingGroups = computed(() => {
+  const groups = []
   
-  return { total, completed, inProgress }
+  // Group trucks by shipping number
+  uniqueShippingNos.value.forEach(shippingNo => {
+    const shippingTrucks = trucks.value.filter(t => t.shipping_no === shippingNo)
+    
+    // If more than 3 trucks for this shipping number, create multiple pages
+    if (shippingTrucks.length > itemsPerPage) {
+      const totalPages = Math.ceil(shippingTrucks.length / itemsPerPage)
+      
+      for (let page = 0; page < totalPages; page++) {
+        const start = page * itemsPerPage
+        const end = Math.min(start + itemsPerPage, shippingTrucks.length)
+        
+        groups.push({
+          shippingNo: shippingNo,
+          trucks: shippingTrucks.slice(start, end),
+          currentPage: page + 1,
+          pages: totalPages,
+          totalTrucks: shippingTrucks.length
+        })
+      }
+    } else {
+      // Single page for this shipping number
+      groups.push({
+        shippingNo: shippingNo,
+        trucks: shippingTrucks,
+        currentPage: 1,
+        pages: 1,
+        totalTrucks: shippingTrucks.length
+      })
+    }
+  })
+  
+  return groups.length ? groups : []
+})
+
+// Statistics
+const statistics = computed(() => {
+  return {
+    total: trucks.value.length,
+    completed: trucks.value.filter(t => 
+      t.status_preparation === 'Finished' && t.status_loading === 'Finished'
+    ).length,
+    inProgress: trucks.value.filter(t => 
+      (t.status_preparation !== 'Finished' || t.status_loading !== 'Finished')
+    ).length
+  }
 })
 
 const getStatusColor = (status) => {
   switch (status) {
-    case 'On Process': return 'yellow-darken-1'  // Yellow
-    case 'Delay': return 'red'                   // Red
-    case 'Finished': return 'green'              // Green
+    case 'On Process': return 'yellow-darken-1'
+    case 'Delay': return 'red'
+    case 'Finished': return 'green'
     default: return 'grey'
   }
 }
 
-// Enhanced getStatusIcon from right code
-const getStatusIcon = (status) => {
-  switch (status) {
-    case 'On Process': return 'mdi-progress-clock'
-    case 'Delay': return 'mdi-alert-circle'
-    case 'Finished': return 'mdi-check-circle'
-    default: return 'mdi-help-circle'
-  }
-}
-
-// Enhanced formatTime from right code
 const formatTime = (time) => {
   if (!time) return '–'
   try {
-    // Ensure time is in HH:MM format
     if (time.includes(':')) {
       const [hours, minutes] = time.split(':')
       return `${hours.padStart(2, '0')}:${minutes.padStart(2, '0')}`
@@ -312,28 +340,30 @@ const formatTime = (time) => {
   }
 }
 
-// formatDate from right code
-const formatDate = (dateString) => {
-  if (!dateString) return ''
+const formatDate = (date) => {
   try {
-    const date = new Date(dateString)
     return date.toLocaleDateString('en-GB', {
-      weekday: 'long',
+      weekday: 'short',
       day: '2-digit',
-      month: 'long',
+      month: 'short',
       year: 'numeric'
     })
   } catch {
-    return dateString
+    return ''
   }
 }
 
-// Set up auto-refresh every 30 seconds
+// Handle carousel changes
+const handleCarouselChange = () => {
+  console.log('Slide changed to:', currentSlide.value + 1)
+}
+
+// Set up auto-refresh
 let refreshInterval = null
-let activityInterval = null
+let timeInterval = null
 
 onMounted(() => {
-  // Set date filter to today (from right code)
+  // Set date filter to today
   const today = new Date().toISOString().split('T')[0]
   truckStore.setDateFilter(today, today)
   
@@ -341,102 +371,40 @@ onMounted(() => {
   truckStore.connectWebSocket()
   truckStore.fetchTrucks()
   
-  // Auto-refresh data every 30 seconds (from right code)
+  // Update time every second
+  updateTime()
+  timeInterval = setInterval(updateTime, 1000)
+  
+  // Auto-refresh data every 30 seconds
   refreshInterval = setInterval(() => {
     truckStore.fetchTrucks()
-    handleActivity() // Keep session alive on data refresh
   }, 30000)
   
-  // Initialize session management for guest
-  const userRole = localStorage.getItem('userRole') || sessionStorage.getItem('userRole')
-  if (userRole === 'guest') {
-    resetSessionTimeout()
-    
-    // Check session status every minute
-    activityInterval = setInterval(() => {
-      const now = Date.now()
-      const timeSinceLastActivity = now - lastActivity.value
-      
-      // Auto-extend session if TV view is still active
-      if (timeSinceLastActivity < SESSION_DURATION) {
-        extendSession()
-      }
-    }, 60000) // Check every minute
-  }
-  
-  // Prevent default page visibility change behavior for TV view
-  document.addEventListener('visibilitychange', handleVisibilityChange)
-  
-  // Keep screen awake for TV view
-  if ('wakeLock' in navigator) {
-    requestWakeLock()
-  }
-  
-  // Toggle controls with keyboard shortcut (Ctrl+Shift+D) from right code
+  // Toggle controls with keyboard shortcut (Ctrl+Shift+D)
   const handleKeyPress = (e) => {
     if (e.ctrlKey && e.shiftKey && e.key === 'D') {
       showControls.value = !showControls.value
     }
-    handleActivity() // Any keyboard activity keeps session alive
   }
   window.addEventListener('keydown', handleKeyPress)
   
-  // Add mouse move listener for activity tracking
-  window.addEventListener('mousemove', handleActivity)
-  
-  // Watch for carousel changes
-  watch(currentSlide, handleCarouselChange)
-})
-
-// Handle page visibility changes
-const handleVisibilityChange = () => {
-  if (!document.hidden) {
-    // Page is visible again, refresh data and reset session
-    truckStore.fetchTrucks()
-    const userRole = localStorage.getItem('userRole') || sessionStorage.getItem('userRole')
-    if (userRole === 'guest') {
-      extendSession()
-    }
-  }
-}
-
-// Request wake lock to keep screen on
-let wakeLock = null
-const requestWakeLock = async () => {
-  try {
-    wakeLock = await navigator.wakeLock.request('screen')
-    console.log('Wake lock active - screen will stay on')
-    
-    wakeLock.addEventListener('release', () => {
-      console.log('Wake lock released')
+  // Request wake lock to keep screen on
+  if ('wakeLock' in navigator) {
+    navigator.wakeLock.request('screen').catch(err => {
+      console.log('Failed to acquire wake lock:', err)
     })
-  } catch (err) {
-    console.error(`Failed to acquire wake lock: ${err.message}`)
   }
-}
+})
 
 onUnmounted(() => {
   truckStore.disconnectWebSocket()
   
-  // Clear all intervals
   if (refreshInterval) {
     clearInterval(refreshInterval)
   }
-  if (activityInterval) {
-    clearInterval(activityInterval)
+  if (timeInterval) {
+    clearInterval(timeInterval)
   }
-  if (sessionTimeout.value) {
-    clearTimeout(sessionTimeout.value)
-  }
-  
-  // Release wake lock
-  if (wakeLock) {
-    wakeLock.release()
-  }
-  
-  // Remove event listeners
-  document.removeEventListener('visibilitychange', handleVisibilityChange)
-  window.removeEventListener('mousemove', handleActivity)
 })
 </script>
 
@@ -461,31 +429,36 @@ onUnmounted(() => {
 }
 
 .card-container {
-  width: min(90vw, 1600px);
+  width: min(95vw, 1800px);
   background: white;
-  max-height: 85vh;
+  max-height: 90vh;
+  overflow: hidden;
 }
 
 .tv-table {
   background: transparent !important;
-  max-height: calc(85vh - 140px);
+  max-height: calc(85vh - 200px);
   overflow-y: auto;
 }
 
 .tv-row td {
-  padding: 20px !important;
-  border-bottom: 1px solid #e5e7eb;
+  padding: 24px !important;
+  border-bottom: 2px solid #e5e7eb;
 }
 
 .v-table thead th {
   background-color: #f9fafb;
-  padding: 20px !important;
+  padding: 24px !important;
   color: #1f2937;
+  font-size: 1.25rem !important;
+  position: sticky;
+  top: 0;
+  z-index: 10;
 }
 
 .v-carousel__controls {
   bottom: 32px !important;
-  background: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.95);
   border-radius: 16px;
   padding: 8px;
   backdrop-filter: blur(4px);
@@ -513,9 +486,29 @@ onUnmounted(() => {
   position: fixed;
   bottom: 100px;
   right: 20px;
-  width: 300px;
+  width: 350px;
   z-index: 999;
-  background: rgba(255, 255, 255, 0.95);
+  background: rgba(255, 255, 255, 0.98);
   backdrop-filter: blur(10px);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+/* Custom scrollbar for table */
+.tv-table::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.tv-table::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+.tv-table::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 4px;
+}
+
+.tv-table::-webkit-scrollbar-thumb:hover {
+  background: #555;
 }
 </style>

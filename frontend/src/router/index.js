@@ -1,3 +1,4 @@
+// frontend/src/router/index.js - Fixed Guest Session
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
@@ -57,12 +58,32 @@ const router = createRouter({
   routes
 })
 
-// Navigation guard
-router.beforeEach((to, from, next) => {
+// Navigation guard with better guest handling
+router.beforeEach(async (to, from, next) => {
   const authStore = useAuthStore()
+  
+  // Initialize auth from localStorage
+  authStore.initAuth()
   
   // Check if route requires authentication
   if (to.meta.requiresAuth && !authStore.isAuthenticated) {
+    // Check if there's a token that might be expired
+    const token = localStorage.getItem('token')
+    const isGuest = localStorage.getItem('isGuest') === 'true'
+    
+    if (token && isGuest) {
+      // Try to refresh guest token
+      console.log('🔄 Attempting to refresh guest session...')
+      const refreshed = await authStore.refreshGuestToken()
+      
+      if (refreshed) {
+        // Successfully refreshed, continue
+        next()
+        return
+      }
+    }
+    
+    // No valid auth, redirect to login
     next('/login')
     return
   }
@@ -79,7 +100,39 @@ router.beforeEach((to, from, next) => {
     return
   }
   
+  // Keep guest session alive
+  if (authStore.isGuest && authStore.isAuthenticated) {
+    authStore.keepAlive()
+  }
+  
   next()
+})
+
+// Set up periodic keep-alive for guest sessions
+let keepAliveInterval = null
+
+router.afterEach((to, from) => {
+  const authStore = useAuthStore()
+  
+  // Clear old interval
+  if (keepAliveInterval) {
+    clearInterval(keepAliveInterval)
+    keepAliveInterval = null
+  }
+  
+  // Set up keep-alive for authenticated guest users
+  if (authStore.isGuest && authStore.isAuthenticated && to.meta.requiresAuth) {
+    // Send keep-alive every 5 minutes
+    keepAliveInterval = setInterval(() => {
+      if (authStore.isGuest && authStore.isAuthenticated) {
+        authStore.keepAlive()
+      } else {
+        // Clear interval if no longer guest
+        clearInterval(keepAliveInterval)
+        keepAliveInterval = null
+      }
+    }, 5 * 60 * 1000) // 5 minutes
+  }
 })
 
 export default router

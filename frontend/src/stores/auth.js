@@ -1,4 +1,4 @@
-// frontend/src/stores/auth.js - Streamlined & Fixed
+// frontend/src/stores/auth.js - Fixed Guest Session Management
 import { defineStore } from 'pinia'
 import axios from 'axios'
 
@@ -30,7 +30,7 @@ authApi.interceptors.request.use(
   (error) => Promise.reject(error)
 )
 
-// Add response interceptor
+// Add response interceptor - but don't auto-logout for guest users
 authApi.interceptors.response.use(
   (response) => {
     console.log('📥 Auth Response:', response.status, response.config.url)
@@ -39,11 +39,17 @@ authApi.interceptors.response.use(
   (error) => {
     console.error('📥 Auth Error:', error.response?.status, error.response?.config?.url)
     
+    // Don't auto-logout if it's a guest user
     if (error.response?.status === 401) {
-      console.warn('🔐 Token expired/invalid - clearing auth')
-      localStorage.removeItem('token')
-      localStorage.removeItem('role')
-      localStorage.removeItem('user')
+      const isGuest = localStorage.getItem('isGuest') === 'true'
+      if (!isGuest) {
+        console.warn('🔐 Token expired/invalid - clearing auth')
+        localStorage.removeItem('token')
+        localStorage.removeItem('role')
+        localStorage.removeItem('user')
+      } else {
+        console.log('🔐 Guest token expired - will refresh')
+      }
     }
     
     return Promise.reject(error)
@@ -55,7 +61,10 @@ export const useAuthStore = defineStore('auth', {
     token: localStorage.getItem('token') || null,
     user: JSON.parse(localStorage.getItem('user') || 'null'),
     role: localStorage.getItem('role') || null,
-    loading: false
+    isGuest: localStorage.getItem('isGuest') === 'true',
+    loading: false,
+    tokenRefreshInterval: null,
+    lastTokenRefresh: null
   }),
   
   getters: {
@@ -72,10 +81,11 @@ export const useAuthStore = defineStore('auth', {
   
   actions: {
     setAuth(data) {
-      console.log('🔐 Setting auth data:', { role: data.role, hasToken: !!data.access_token })
+      console.log('🔐 Setting auth data:', { role: data.role, hasToken: !!data.access_token, isGuest: data.is_guest })
       
       this.token = data.access_token
       this.role = data.role
+      this.isGuest = data.is_guest || false
       this.user = {
         username: data.username || this.role || 'User',
         role: data.role
@@ -85,21 +95,32 @@ export const useAuthStore = defineStore('auth', {
       localStorage.setItem('token', data.access_token)
       localStorage.setItem('role', data.role)
       localStorage.setItem('user', JSON.stringify(this.user))
+      localStorage.setItem('isGuest', this.isGuest.toString())
       
       // Set default header for all axios requests
       axios.defaults.headers.common['Authorization'] = `Bearer ${data.access_token}`
+      
+      // Start token refresh for guest users
+      if (this.isGuest) {
+        this.startTokenRefresh()
+      }
     },
     
     clearAuth() {
       console.log('🔓 Clearing auth')
       
+      // Stop token refresh if running
+      this.stopTokenRefresh()
+      
       this.token = null
       this.role = null
       this.user = null
+      this.isGuest = false
       
       localStorage.removeItem('token')
       localStorage.removeItem('role')
       localStorage.removeItem('user')
+      localStorage.removeItem('isGuest')
       
       delete axios.defaults.headers.common['Authorization']
     },
@@ -121,7 +142,8 @@ export const useAuthStore = defineStore('auth', {
         this.setAuth({
           access_token: response.data.access_token,
           role: response.data.role,
-          username
+          username,
+          is_guest: false
         })
         
         return { success: true, data: response.data }
@@ -147,7 +169,8 @@ export const useAuthStore = defineStore('auth', {
             this.setAuth({
               access_token: retryResponse.data.access_token,
               role: retryResponse.data.role,
-              username
+              username,
+              is_guest: false
             })
             
             return { success: true, data: retryResponse.data }
@@ -179,7 +202,8 @@ export const useAuthStore = defineStore('auth', {
         this.setAuth({
           access_token: response.data.access_token,
           role: response.data.role,
-          username: 'guest_viewer'
+          username: 'guest_viewer',
+          is_guest: true
         })
         
         return { success: true, data: response.data }
@@ -192,6 +216,71 @@ export const useAuthStore = defineStore('auth', {
         }
       } finally {
         this.loading = false
+      }
+    },
+    
+    async refreshGuestToken() {
+      if (!this.isGuest) return false
+      
+      try {
+        console.log('🔄 Refreshing guest token...')
+        
+        // Call guest login again to get new token
+        const response = await authApi.post('/api/auth/guest-login')
+        
+        if (response.data?.access_token) {
+          // Update token without clearing other data
+          this.token = response.data.access_token
+          localStorage.setItem('token', response.data.access_token)
+          axios.defaults.headers.common['Authorization'] = `Bearer ${response.data.access_token}`
+          
+          this.lastTokenRefresh = Date.now()
+          console.log('✅ Guest token refreshed successfully')
+          return true
+        }
+        
+        return false
+      } catch (error) {
+        console.error('❌ Failed to refresh guest token:', error)
+        
+        // If refresh fails, try to re-login as guest
+        const result = await this.guestLogin()
+        return result.success
+      }
+    },
+    
+    startTokenRefresh() {
+      if (this.tokenRefreshInterval) {
+        console.log('⚠️ Token refresh already running')
+        return
+      }
+      
+      // Refresh token every 45 minutes (before typical 60-minute expiry)
+      const REFRESH_INTERVAL = 45 * 60 * 1000 // 45 minutes
+      
+      console.log('🔄 Starting automatic token refresh for guest user')
+      
+      // Do initial refresh if needed
+      if (!this.lastTokenRefresh || Date.now() - this.lastTokenRefresh > REFRESH_INTERVAL) {
+        this.refreshGuestToken()
+      }
+      
+      // Set up interval for automatic refresh
+      this.tokenRefreshInterval = setInterval(() => {
+        if (this.isGuest && this.token) {
+          this.refreshGuestToken()
+        } else {
+          // Stop refresh if no longer guest
+          this.stopTokenRefresh()
+        }
+      }, REFRESH_INTERVAL)
+    },
+    
+    stopTokenRefresh() {
+      if (this.tokenRefreshInterval) {
+        console.log('⏹️ Stopping token refresh')
+        clearInterval(this.tokenRefreshInterval)
+        this.tokenRefreshInterval = null
       }
     },
     
@@ -210,6 +299,12 @@ export const useAuthStore = defineStore('auth', {
       if (this.token) {
         console.log('🔄 Initializing auth from localStorage')
         axios.defaults.headers.common['Authorization'] = `Bearer ${this.token}`
+        
+        // Start token refresh if guest
+        if (this.isGuest) {
+          this.startTokenRefresh()
+        }
+        
         return true
       }
       return false
@@ -226,10 +321,42 @@ export const useAuthStore = defineStore('auth', {
         return true
       } catch (error) {
         console.log('❌ Token test failed:', error.response?.status)
-        if (error.response?.status === 401) {
+        
+        // If guest, try to refresh
+        if (this.isGuest && error.response?.status === 401) {
+          console.log('🔄 Guest token expired, refreshing...')
+          const refreshed = await this.refreshGuestToken()
+          if (refreshed) {
+            // Test again after refresh
+            try {
+              await authApi.get('/health')
+              return true
+            } catch {
+              return false
+            }
+          }
+        }
+        
+        // Only clear auth if not guest or refresh failed
+        if (!this.isGuest) {
           this.clearAuth()
         }
+        
         return false
+      }
+    },
+    
+    // Keep session alive for guest users
+    async keepAlive() {
+      if (!this.isGuest || !this.token) return
+      
+      try {
+        // Just make a simple API call to keep session active
+        await authApi.get('/health')
+        console.log('💓 Session kept alive')
+      } catch (error) {
+        console.log('⚠️ Keep alive failed, refreshing token...')
+        await this.refreshGuestToken()
       }
     }
   }

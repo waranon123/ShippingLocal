@@ -1,5 +1,4 @@
-<!-- frontend/src/views/DashboardView.vue - Enhanced with Shipping Filter -->
-
+<!-- frontend/src/views/DashboardView.vue - Fixed Shipping Sort -->
 <template>
   <v-container fluid>
     <v-row>
@@ -14,18 +13,6 @@
           </v-card-title>
           
           <v-card-text>
-            <!-- Debug Info (remove in production) -->
-            <v-alert v-if="showDebug" type="info" dense dismissible @click:close="showDebug = false">
-              <div class="text-caption">
-                <strong>Debug Info:</strong><br>
-                Trucks: {{ trucks.length }} | Filtered: {{ filteredTrucks.length }} | Loading: {{ loading }} | Error: {{ truckStore.error }}<br>
-                Date Filter: {{ dateFrom }} to {{ dateTo }}<br>
-                Shipping Filter: {{ selectedShippingNo || 'All' }}<br>
-                Terminal Filter: {{ selectedTerminal || 'All' }}<br>
-                API URL: {{ apiUrl }}
-              </div>
-            </v-alert>
-            
             <!-- Date Filter Component -->
             <DateFilter
               v-model:from-date="dateFrom"
@@ -100,11 +87,11 @@
             
             <!-- Filter Row -->
             <v-row class="mb-4">
-              <!-- Shipping No Filter -->
+              <!-- Shipping No Filter with Natural Sort -->
               <v-col cols="12" md="3">
                 <v-autocomplete
                   v-model="selectedShippingNo"
-                  :items="uniqueShippingNos"
+                  :items="sortedShippingNos"
                   label="Filter by Shipping No"
                   prepend-icon="mdi-truck-delivery"
                   clearable
@@ -275,15 +262,6 @@
                   class="mr-2"
                 >
                   Clear All
-                </v-btn>
-                <v-btn 
-                  size="small" 
-                  color="warning" 
-                  variant="outlined" 
-                  @click="toggleDebug"
-                  prepend-icon="mdi-bug"
-                >
-                  Debug
                 </v-btn>
               </v-col>
             </v-row>
@@ -546,7 +524,6 @@ const dialog = ref(false)
 const editedIndex = ref(-1)
 const valid = ref(false)
 const form = ref(null)
-const showDebug = ref(false)
 
 const editedItem = ref({
   terminal: '',
@@ -590,6 +567,88 @@ const headers = [
 const loading = computed(() => truckStore.loading)
 const trucks = computed(() => truckStore.trucks)
 
+// Natural Sort function for alphanumeric strings
+const naturalSort = (a, b) => {
+  // Extract parts of the string (letters and numbers)
+  const extractParts = (str) => {
+    const parts = []
+    let currentPart = ''
+    let isNumeric = false
+    
+    for (let i = 0; i < str.length; i++) {
+      const char = str[i]
+      const charIsNumeric = !isNaN(char) && char !== ' '
+      
+      if (charIsNumeric !== isNumeric && currentPart) {
+        parts.push({
+          value: isNumeric ? parseInt(currentPart) : currentPart,
+          isNumeric
+        })
+        currentPart = char
+        isNumeric = charIsNumeric
+      } else {
+        currentPart += char
+        isNumeric = charIsNumeric
+      }
+    }
+    
+    if (currentPart) {
+      parts.push({
+        value: isNumeric ? parseInt(currentPart) : currentPart,
+        isNumeric
+      })
+    }
+    
+    return parts
+  }
+  
+  const partsA = extractParts(a)
+  const partsB = extractParts(b)
+  
+  for (let i = 0; i < Math.min(partsA.length, partsB.length); i++) {
+    const partA = partsA[i]
+    const partB = partsB[i]
+    
+    // If both are numbers, compare numerically
+    if (partA.isNumeric && partB.isNumeric) {
+      if (partA.value !== partB.value) {
+        return partA.value - partB.value
+      }
+    }
+    // If one is number and one is string, number comes first
+    else if (partA.isNumeric && !partB.isNumeric) {
+      return -1
+    }
+    else if (!partA.isNumeric && partB.isNumeric) {
+      return 1
+    }
+    // If both are strings, compare alphabetically
+    else {
+      const comparison = partA.value.localeCompare(partB.value)
+      if (comparison !== 0) {
+        return comparison
+      }
+    }
+  }
+  
+  // If all parts are equal, compare lengths
+  return partsA.length - partsB.length
+}
+
+// Get unique shipping numbers with natural sort
+const sortedShippingNos = computed(() => {
+  const shippingNos = [...new Set(trucks.value.map(t => t.shipping_no).filter(Boolean))]
+  
+  // Apply natural sort
+  return shippingNos.sort(naturalSort)
+})
+
+// Get unique terminals for filter
+const uniqueTerminals = computed(() => {
+  const terminals = [...new Set(trucks.value.map(t => t.terminal).filter(Boolean))]
+  return terminals.sort()
+})
+
 // Filtered and sorted trucks based on all filters
 const filteredTrucks = computed(() => {
   let result = trucks.value
@@ -614,35 +673,18 @@ const filteredTrucks = computed(() => {
     result = result.filter(truck => truck.status_loading === selectedLoadStatus.value)
   }
   
-  // Sort by Terminal first, then by Loading End time (earliest to latest)
+  // Sort by Loading End time only (earliest to latest)
   result = [...result].sort((a, b) => {
-    // First sort by terminal
-    if (a.terminal !== b.terminal) {
-      return a.terminal.localeCompare(b.terminal)
-    }
-    
-    // Then sort by loading_end time (empty times go to the end)
+    // Handle empty times - put them at the end
     if (!a.loading_end && !b.loading_end) return 0
     if (!a.loading_end) return 1  // Move empty times to end
     if (!b.loading_end) return -1 // Move empty times to end
     
-    // Compare times (HH:MM format)
+    // Compare times (HH:MM format) - earliest first
     return a.loading_end.localeCompare(b.loading_end)
   })
   
   return result
-})
-
-// Get unique shipping numbers for autocomplete
-const uniqueShippingNos = computed(() => {
-  const shippingNos = [...new Set(trucks.value.map(t => t.shipping_no))]
-  return shippingNos.sort()
-})
-
-// Get unique terminals for filter
-const uniqueTerminals = computed(() => {
-  const terminals = [...new Set(trucks.value.map(t => t.terminal))]
-  return terminals.sort()
 })
 
 // Stats computations
@@ -673,97 +715,6 @@ const hasActiveFilters = computed(() => {
 
 const canEdit = computed(() => authStore.hasRole('user'))
 const canDelete = computed(() => authStore.hasRole('admin'))
-const apiUrl = computed(() => import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000')
-
-// Quick date filter methods
-const setToday = () => {
-  const today = new Date().toISOString().split('T')[0]
-  dateFrom.value = today
-  dateTo.value = today
-  truckStore.setDateFilter(today, today)
-  applyFilters()
-}
-
-const setYesterday = () => {
-  const yesterday = new Date()
-  yesterday.setDate(yesterday.getDate() - 1)
-  const dateStr = yesterday.toISOString().split('T')[0]
-  dateFrom.value = dateStr
-  dateTo.value = dateStr
-  truckStore.setDateFilter(dateStr, dateStr)
-  applyFilters()
-}
-
-const setThisWeek = () => {
-  const today = new Date()
-  const monday = new Date(today)
-  const dayOfWeek = today.getDay()
-  const daysToSubtract = dayOfWeek === 0 ? 6 : dayOfWeek - 1
-  monday.setDate(today.getDate() - daysToSubtract)
-  
-  const mondayStr = monday.toISOString().split('T')[0]
-  const todayStr = today.toISOString().split('T')[0]
-  
-  dateFrom.value = mondayStr
-  dateTo.value = todayStr
-  truckStore.setDateFilter(mondayStr, todayStr)
-  applyFilters()
-}
-
-const setLastWeek = () => {
-  const today = new Date()
-  const lastMonday = new Date(today)
-  const lastSunday = new Date(today)
-  
-  const dayOfWeek = today.getDay()
-  const daysToLastMonday = dayOfWeek === 0 ? 13 : dayOfWeek + 6
-  const daysToLastSunday = dayOfWeek === 0 ? 7 : dayOfWeek
-  
-  lastMonday.setDate(today.getDate() - daysToLastMonday)
-  lastSunday.setDate(today.getDate() - daysToLastSunday)
-  
-  const mondayStr = lastMonday.toISOString().split('T')[0]
-  const sundayStr = lastSunday.toISOString().split('T')[0]
-  
-  dateFrom.value = mondayStr
-  dateTo.value = sundayStr
-  truckStore.setDateFilter(mondayStr, sundayStr)
-  applyFilters()
-}
-
-const setThisMonth = () => {
-  const today = new Date()
-  const firstDay = new Date(today.getFullYear(), today.getMonth(), 1)
-  
-  const firstDayStr = firstDay.toISOString().split('T')[0]
-  const todayStr = today.toISOString().split('T')[0]
-  
-  dateFrom.value = firstDayStr
-  dateTo.value = todayStr
-  truckStore.setDateFilter(firstDayStr, todayStr)
-  applyFilters()
-}
-
-const setLastMonth = () => {
-  const today = new Date()
-  const firstDay = new Date(today.getFullYear(), today.getMonth() - 1, 1)
-  const lastDay = new Date(today.getFullYear(), today.getMonth(), 0)
-  
-  const firstDayStr = firstDay.toISOString().split('T')[0]
-  const lastDayStr = lastDay.toISOString().split('T')[0]
-  
-  dateFrom.value = firstDayStr
-  dateTo.value = lastDayStr
-  truckStore.setDateFilter(firstDayStr, lastDayStr)
-  applyFilters()
-}
-
-const setAllTime = () => {
-  dateFrom.value = null
-  dateTo.value = null
-  truckStore.setDateFilter(null, null)
-  applyFilters()
-}
 
 // Methods
 const getShippingInfo = (shippingNo) => {
@@ -776,9 +727,9 @@ const getShippingInfo = (shippingNo) => {
 
 const getStatusColor = (status) => {
   switch (status) {
-    case 'On Process': return 'yellow-darken-1'  // Yellow
-    case 'Delay': return 'red'                   // Red
-    case 'Finished': return 'green'              // Green
+    case 'On Process': return 'yellow-darken-1'
+    case 'Delay': return 'red'
+    case 'Finished': return 'green'
     default: return 'grey'
   }
 }
@@ -810,14 +761,10 @@ const applyFilters = () => {
     dateTo: dateTo.value
   })
   
-  // Build filter object for API
   const filters = {}
   if (selectedTerminal.value) filters.terminal = selectedTerminal.value
   if (selectedPrepStatus.value) filters.status_preparation = selectedPrepStatus.value
   if (selectedLoadStatus.value) filters.status_loading = selectedLoadStatus.value
-  
-  // Note: Shipping filter is handled client-side in filteredTrucks computed
-  // because the backend might not support it yet
   
   refreshData()
 }
@@ -860,13 +807,6 @@ const filterByShipping = (shippingNo) => {
 const filterByTerminal = (terminal) => {
   selectedTerminal.value = terminal
   applyFilters()
-}
-
-const toggleDebug = () => {
-  showDebug.value = !showDebug.value
-  if (showDebug.value) {
-    truckStore.debugState()
-  }
 }
 
 const getNoDataText = () => {
@@ -981,7 +921,6 @@ const exportCSV = () => {
   
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8' })
   
-  // Build filename based on filters
   let filename = 'truck_data'
   if (selectedShippingNo.value) filename += `_${selectedShippingNo.value}`
   if (selectedTerminal.value) filename += `_terminal${selectedTerminal.value}`
@@ -995,16 +934,95 @@ const exportCSV = () => {
   saveAs(blob, filename)
 }
 
-// Watch for changes in store state
-watch(() => truckStore.error, (newError) => {
-  if (newError) {
-    console.error('🚨 Store error detected:', newError)
-  }
-})
+// Quick date filter methods
+const setToday = () => {
+  const today = new Date().toISOString().split('T')[0]
+  dateFrom.value = today
+  dateTo.value = today
+  truckStore.setDateFilter(today, today)
+  applyFilters()
+}
 
-watch(() => trucks.value.length, (newLength, oldLength) => {
-  console.log('📊 Trucks count changed:', oldLength, '->', newLength)
-})
+const setYesterday = () => {
+  const yesterday = new Date()
+  yesterday.setDate(yesterday.getDate() - 1)
+  const dateStr = yesterday.toISOString().split('T')[0]
+  dateFrom.value = dateStr
+  dateTo.value = dateStr
+  truckStore.setDateFilter(dateStr, dateStr)
+  applyFilters()
+}
+
+const setThisWeek = () => {
+  const today = new Date()
+  const monday = new Date(today)
+  const dayOfWeek = today.getDay()
+  const daysToSubtract = dayOfWeek === 0 ? 6 : dayOfWeek - 1
+  monday.setDate(today.getDate() - daysToSubtract)
+  
+  const mondayStr = monday.toISOString().split('T')[0]
+  const todayStr = today.toISOString().split('T')[0]
+  
+  dateFrom.value = mondayStr
+  dateTo.value = todayStr
+  truckStore.setDateFilter(mondayStr, todayStr)
+  applyFilters()
+}
+
+const setLastWeek = () => {
+  const today = new Date()
+  const lastMonday = new Date(today)
+  const lastSunday = new Date(today)
+  
+  const dayOfWeek = today.getDay()
+  const daysToLastMonday = dayOfWeek === 0 ? 13 : dayOfWeek + 6
+  const daysToLastSunday = dayOfWeek === 0 ? 7 : dayOfWeek
+  
+  lastMonday.setDate(today.getDate() - daysToLastMonday)
+  lastSunday.setDate(today.getDate() - daysToLastSunday)
+  
+  const mondayStr = lastMonday.toISOString().split('T')[0]
+  const sundayStr = lastSunday.toISOString().split('T')[0]
+  
+  dateFrom.value = mondayStr
+  dateTo.value = sundayStr
+  truckStore.setDateFilter(mondayStr, sundayStr)
+  applyFilters()
+}
+
+const setThisMonth = () => {
+  const today = new Date()
+  const firstDay = new Date(today.getFullYear(), today.getMonth(), 1)
+  
+  const firstDayStr = firstDay.toISOString().split('T')[0]
+  const todayStr = today.toISOString().split('T')[0]
+  
+  dateFrom.value = firstDayStr
+  dateTo.value = todayStr
+  truckStore.setDateFilter(firstDayStr, todayStr)
+  applyFilters()
+}
+
+const setLastMonth = () => {
+  const today = new Date()
+  const firstDay = new Date(today.getFullYear(), today.getMonth() - 1, 1)
+  const lastDay = new Date(today.getFullYear(), today.getMonth(), 0)
+  
+  const firstDayStr = firstDay.toISOString().split('T')[0]
+  const lastDayStr = lastDay.toISOString().split('T')[0]
+  
+  dateFrom.value = firstDayStr
+  dateTo.value = lastDayStr
+  truckStore.setDateFilter(firstDayStr, lastDayStr)
+  applyFilters()
+}
+
+const setAllTime = () => {
+  dateFrom.value = null
+  dateTo.value = null
+  truckStore.setDateFilter(null, null)
+  applyFilters()
+}
 
 // Lifecycle hooks
 onMounted(async () => {

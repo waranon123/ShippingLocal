@@ -1,4 +1,4 @@
-<!-- frontend/src/App.vue - Updated with Global Status Colors -->
+<!-- frontend/src/App.vue - Fixed Guest Session Handler -->
 <template>
   <v-app>
     <!-- Navigation Drawer -->
@@ -45,6 +45,10 @@
       <template v-slot:append>
         <v-divider></v-divider>
         <v-list>
+          <v-list-item v-if="isGuest" class="text-caption">
+            <v-list-item-title>Guest Mode</v-list-item-title>
+            <v-list-item-subtitle>View Only</v-list-item-subtitle>
+          </v-list-item>
           <v-list-item
             prepend-icon="mdi-logout"
             title="Logout"
@@ -62,6 +66,10 @@
       <v-chip v-if="user" color="white" text-color="primary">
         {{ user.username }} ({{ user.role }})
       </v-chip>
+      <v-chip v-if="isGuest" color="warning" class="ml-2">
+        <v-icon start size="small">mdi-eye</v-icon>
+        Guest
+      </v-chip>
     </v-app-bar>
 
     <!-- Main Content -->
@@ -72,7 +80,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import axios from 'axios'
@@ -88,12 +96,51 @@ const showNavigation = computed(() => {
 })
 
 const user = computed(() => authStore.user)
+const isGuest = computed(() => authStore.isGuest)
 const canManage = computed(() => authStore.hasRole('user'))
 const isAdmin = computed(() => authStore.hasRole('admin'))
 
 const logout = () => {
   authStore.logout()
   router.push('/login')
+}
+
+// Set up visibility change handler for guest session
+const handleVisibilityChange = () => {
+  if (!document.hidden && authStore.isGuest && authStore.isAuthenticated) {
+    // Page is visible again, keep session alive
+    authStore.keepAlive()
+  }
+}
+
+// Set up activity tracking for guest users
+const handleUserActivity = () => {
+  if (authStore.isGuest && authStore.isAuthenticated) {
+    // Update last activity time (handled internally by store)
+    authStore.keepAlive()
+  }
+}
+
+// Prevent session timeout warning for guest users
+let sessionCheckInterval = null
+
+const startSessionCheck = () => {
+  if (sessionCheckInterval) {
+    clearInterval(sessionCheckInterval)
+  }
+  
+  // Check session every 10 minutes
+  sessionCheckInterval = setInterval(() => {
+    if (authStore.isGuest && authStore.isAuthenticated) {
+      // For guest users, silently refresh token if needed
+      authStore.testAuth().then(valid => {
+        if (!valid) {
+          console.log('🔄 Guest session expired, attempting refresh...')
+          authStore.refreshGuestToken()
+        }
+      })
+    }
+  }, 10 * 60 * 1000) // 10 minutes
 }
 
 onMounted(() => {
@@ -114,21 +161,87 @@ onMounted(() => {
     }
   )
 
-  // Response interceptor
+  // Response interceptor with better guest handling
   axios.interceptors.response.use(
     (response) => response,
-    (error) => {
+    async (error) => {
       if (error.response?.status === 401) {
-        authStore.logout()
-        router.push('/login')
+        // Check if guest user
+        if (authStore.isGuest) {
+          console.log('🔄 Guest token expired, refreshing...')
+          const refreshed = await authStore.refreshGuestToken()
+          
+          if (refreshed) {
+            // Retry original request with new token
+            const originalRequest = error.config
+            originalRequest.headers.Authorization = `Bearer ${authStore.token}`
+            return axios(originalRequest)
+          }
+        } else {
+          // Regular user - logout
+          authStore.logout()
+          router.push('/login')
+        }
       }
       return Promise.reject(error)
     }
   )
   
+  // Initialize auth
   if (authStore.token) {
     axios.defaults.headers.common['Authorization'] = `Bearer ${authStore.token}`
-    authStore.fetchUser()
+    authStore.initAuth()
+  }
+  
+  // Set up session check for guest users
+  if (authStore.isGuest) {
+    startSessionCheck()
+  }
+  
+  // Add event listeners for guest session management
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+  
+  // Track user activity (for guest session keep-alive)
+  const activityEvents = ['mousedown', 'keydown', 'scroll', 'touchstart']
+  let lastActivity = Date.now()
+  
+  const throttledActivityHandler = () => {
+    const now = Date.now()
+    // Only trigger if more than 1 minute since last activity
+    if (now - lastActivity > 60000) {
+      lastActivity = now
+      handleUserActivity()
+    }
+  }
+  
+  activityEvents.forEach(event => {
+    document.addEventListener(event, throttledActivityHandler, { passive: true })
+  })
+  
+  // Store cleanup function
+  window.appCleanup = () => {
+    activityEvents.forEach(event => {
+      document.removeEventListener(event, throttledActivityHandler)
+    })
+    document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }
+})
+
+onUnmounted(() => {
+  // Clean up event listeners
+  if (window.appCleanup) {
+    window.appCleanup()
+    delete window.appCleanup
+  }
+  
+  // Clear session check interval
+  if (sessionCheckInterval) {
+    clearInterval(sessionCheckInterval)
+  }
+  
+  // Stop token refresh if running
+  if (authStore.isGuest) {
+    authStore.stopTokenRefresh()
   }
 })
 </script>
@@ -180,38 +293,5 @@ onMounted(() => {
 .v-chip[class*="green"]:not([class*="outlined"]) {
   background-color: #4CAF50 !important;
   color: #FFFFFF !important;
-}
-
-/* Status Text Colors */
-.text-status-on-process {
-  color: #FFC107 !important;
-}
-
-.text-status-delay {
-  color: #F44336 !important;
-}
-
-.text-status-finished {
-  color: #4CAF50 !important;
-}
-
-/* Chart Legend Colors */
-.chart-on-process {
-  background-color: #FFC107 !important;
-}
-
-.chart-delay {
-  background-color: #F44336 !important;
-}
-
-.chart-finished {
-  background-color: #4CAF50 !important;
-}
-
-/* Hover Effects for Status Items */
-.status-hover:hover {
-  transform: scale(1.05);
-  transition: transform 0.2s ease;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
 }
 </style>
